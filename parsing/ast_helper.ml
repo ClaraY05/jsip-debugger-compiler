@@ -693,5 +693,41 @@ let print_function input =
     pconst_desc = (Pconst_string (input, Location.none, None));
     pconst_loc = Location.none} in
   Exp.apply print_function [ (Nolabel, print_arg) ]
-  
+;;
 
+(** iterate through expression and args and format for printing *)
+(*=let format_function_call (exp:Exp) args = 
+  let arg_string = 
+    let format_arg (arg_label:Asttypes.arg_label), (arg:Exp) = 
+      let label_string = match arg_label with 
+      | Asttypes.arg_label.Nolabel _ -> "NO_LABEL"
+      | Asttypes.arg_label.Labelled _ -> "LABELLED"
+      | Asttypes.arg_label.Optional _ -> "OPTIONAL"
+      in 
+      Format.asprintf "(LABEL:[%s],ARGUMENT:[%a])" Pprintast.expression arg arg_label
+    in
+    let rec format_args acc arg_list = match arg_list with 
+      | [] -> acc
+      | first_arg::rest_of_args -> format_args format_function_call(first_arg)::acc rest_of_args
+    in
+    let rec reverse acc list = match list with 
+      | [] -> acc 
+      | first::rest -> reverse first::acc rest
+    in 
+    reverse [] (format_args [] args)
+  in
+
+  let expression = match Exp.pexp_desc exp with 
+    | Pexp_ident (longident _) -> Format.asprintf "function_name:[%a]" Pprintast.longident lid
+    | _ -> Format.asprintf "un-named:[%a]" Pprintast.expression exp 
+  in
+
+  Format.asprintf "FUNCTION(%s) ARGUMENTS(%s)" expression args
+;; *)
+let format_arg (arg_label,arg) = 
+  let label_string = match arg_label with 
+  | Asttypes.Nolabel  -> "NO_LABEL"
+  | Asttypes.Labelled _ -> "LABELLED"
+  | Asttypes.Optional _ -> "OPTIONAL"
+  in
+  Format.asprintf "(LABEL:[%s],ARGUMENT:[%s])" label_string (Pprintast.string_of_expression arg)
