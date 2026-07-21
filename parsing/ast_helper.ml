@@ -686,14 +686,8 @@ end
 
 (** making a print statement for a given file *)
 let print_function input =
-  (*can change printf -> sprintf to adjust*)
-  (*let p1 = Longident.Lident "Printf" in
-  let p2 = Longident.Lident "print" in
-  Exp.ident (Location.mknoloc (Longident.Ldot (Longident.Lident "Module", "function_name")))
-  let print_arg = Exp.constant (Pconst_string (input, None)) in 
-  Exp.apply print [(Nolabel, print_arg)]*)
   let module_longident = Longident.Lident "Printf" in
-  let print_longident = Longident.Ldot (Location.mknoloc module_longident, Location.mknoloc "print") in 
+  let print_longident = Longident.Ldot (Location.mknoloc module_longident, Location.mknoloc "printf") in 
   let print_function = Exp.ident (Location.mknoloc print_longident) in
   let print_arg = Exp.constant {
     pconst_desc = (Pconst_string (input, Location.none, None));
