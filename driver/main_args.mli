@@ -50,6 +50,7 @@ module type Common_options = sig
   val _version : unit -> unit
   val _vnum : unit -> unit
   val _w : string -> unit
+  val _my_flag : unit -> unit
 
   val anonymous : string -> unit
 end
@@ -76,6 +77,7 @@ module type Core_options = sig
   val _dmatchcomp : unit -> unit
   val _drawlambda : unit -> unit
   val _dlambda : unit -> unit
+  val _visual_replay : unit -> unit
 
 end
 
@@ -133,6 +135,7 @@ module type Compiler_options = sig
   val _dprofile : unit -> unit
   val _dump_into_file : unit -> unit
   val _dump_dir : string -> unit
+  val _visual_replay : unit -> unit
 
   val _args: string -> string array
   val _args0: string -> string array

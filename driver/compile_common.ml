@@ -112,7 +112,12 @@ let implementation info ~backend =
   Misc.try_finally ?always:None ~exceptionally (fun () ->
     let parsed = parse_impl info in
     if Clflags.(should_stop_after Compiler_pass.Parsing) then () else begin
-      let typed = typecheck_impl info parsed in
+      let vreplay_ast =
+        if !Clflags.visual_replay
+        then Vreplay.inject_instrumentation parsed
+        else parsed
+      in
+      let typed = typecheck_impl info vreplay_ast in
       if Clflags.(should_stop_after Compiler_pass.Typing) then () else begin
         backend info typed
       end;
