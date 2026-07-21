@@ -516,6 +516,3 @@ module Of:
       label with_loc -> core_type -> object_field
     val inherit_: ?loc:loc -> core_type -> object_field
   end
-
-(** making a print statement for a given file *)
-val print_function: string -> expression 

@@ -861,7 +861,7 @@ module type Common_options = sig
   val _version : unit -> unit
   val _vnum : unit -> unit
   val _w : string -> unit
-  val _my_flag : unit -> unit
+  val _visual_replay : unit -> unit
 
   val anonymous : string -> unit
 end

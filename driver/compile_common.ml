@@ -134,7 +134,7 @@ let implementation info ~backend =
     if Clflags.(should_stop_after Compiler_pass.Parsing) then () else begin
       let vreplay_ast = 
         if !Clflags.visual_replay 
-        then Vreplay.inject_instrumentation parse_result
+        then {parse_result with Parse_result.ast = Vreplay.inject_instrumentation parse_result.ast}
         else parse_result 
       in
       let typed = typecheck_impl vreplay_ast in
