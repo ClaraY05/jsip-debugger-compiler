@@ -695,6 +695,10 @@ let mk_dsource f =
 let mk_dlambda f =
   "-dlambda", Arg.Unit f, " (undocumented)"
 
+let mk_visual_replay f = 
+  "-visual-replay", Arg.Unit f, " Render the txt file for JSIP debugger
+   tool"
+
 let mk_drawclambda f =
   "-drawclambda", Arg.Unit f, " (undocumented)"
 
@@ -857,6 +861,7 @@ module type Common_options = sig
   val _version : unit -> unit
   val _vnum : unit -> unit
   val _w : string -> unit
+  val _my_flag : unit -> unit
 
   val anonymous : string -> unit
 end
@@ -884,6 +889,7 @@ module type Core_options = sig
   val _dmatchcomp : unit -> unit
   val _drawlambda : unit -> unit
   val _dlambda : unit -> unit
+  val _visual_replay : unit -> unit
 
 end
 
@@ -941,6 +947,7 @@ module type Compiler_options = sig
   val _dprofile : unit -> unit
   val _dump_into_file : unit -> unit
   val _dump_dir : string -> unit
+  val _visual_replay : unit -> unit
 
   val _args: string -> string array
   val _args0: string -> string array
@@ -1207,6 +1214,7 @@ struct
     mk_dmatchcomp F._dmatchcomp;
     mk_drawlambda F._drawlambda;
     mk_dlambda F._dlambda;
+    mk_visual_replay F._visual_replay;
     mk_dinstr F._dinstr;
     mk_dcamlprimc F._dcamlprimc;
     mk_dtimings F._dtimings;
@@ -1287,6 +1295,7 @@ struct
     mk_dmatchcomp F._dmatchcomp;
     mk_drawlambda F._drawlambda;
     mk_dlambda F._dlambda;
+    mk_visual_replay F._visual_replay;
     mk_dinstr F._dinstr;
 
     mk_args F._args;
@@ -1434,6 +1443,7 @@ struct
     mk_dmatchcomp F._dmatchcomp;
     mk_drawlambda F._drawlambda;
     mk_dlambda F._dlambda;
+    mk_visual_replay F._visual_replay;
     mk_drawclambda F._drawclambda;
     mk_dclambda F._dclambda;
     mk_dcmm_invariants F._dcmm_invariants;
@@ -1555,6 +1565,7 @@ module Make_opttop_options (F : Opttop_options) = struct
     mk_dmatchcomp F._dmatchcomp;
     mk_drawlambda F._drawlambda;
     mk_dlambda F._dlambda;
+    mk_visual_replay F._visual_replay;
     mk_drawclambda F._drawclambda;
     mk_dclambda F._dclambda;
     mk_dcmm_invariants F._dcmm_invariants;
@@ -1722,6 +1733,7 @@ module Default = struct
     let _H dir = hidden_include_dirs := dir :: (!hidden_include_dirs)
     let _color = Misc.set_or_ignore color_reader.parse color
     let _dlambda = set dump_lambda
+    let _visual_replay = set visual_replay
     let _dparsetree = set dump_parsetree
     let _dparsetree_loc_ghost_invariants = set parsetree_ghost_loc_invariant
     let _drawlambda = set dump_rawlambda

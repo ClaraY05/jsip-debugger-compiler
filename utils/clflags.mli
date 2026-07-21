@@ -222,6 +222,7 @@ val parsetree_ghost_loc_invariant : bool ref
 val default_inline_max_depth : int
 val inline_max_depth : Int_arg_helper.parsed ref
 val remove_unused_arguments : bool ref
+val visual_replay : bool ref
 val dump_flambda_verbose : bool ref
 val classic_inlining : bool ref
 val afl_instrument : bool ref

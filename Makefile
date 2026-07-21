@@ -108,6 +108,7 @@ parsing_SOURCES = $(addprefix parsing/, \
   ast_mapper.mli ast_mapper.ml \
   attr_helper.mli attr_helper.ml \
   ast_invariants.mli ast_invariants.ml \
+  vreplay.mli vreplay.ml \
   depend.mli depend.ml)
 
 typing_SOURCES = \
@@ -202,6 +203,7 @@ comp_SOURCES = \
   driver/main_args.mli driver/main_args.ml \
   driver/compmisc.mli driver/compmisc.ml \
   driver/makedepend.mli driver/makedepend.ml \
+  parsing/vreplay.mli parsing/vreplay.ml \
   driver/compile_common.mli driver/compile_common.ml
 # All file format descriptions (including cmx{,s}) are in the
 # ocamlcommon library so that ocamlobjinfo can depend on them.

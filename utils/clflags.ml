@@ -133,7 +133,6 @@ and dump_flambda_let = ref (None : int option) (* -dflambda-let=... *)
 and dump_flambda_verbose = ref false    (* -dflambda-verbose *)
 and dump_instr = ref false              (* -dinstr *)
 and keep_camlprimc_file = ref false     (* -dcamlprimc *)
-
 let keyword_edition: string option ref = ref None
 
 let keep_asm_file = ref false           (* -S *)
@@ -252,6 +251,8 @@ let default_unbox_closures_factor = 10
 let unbox_closures_factor =
   ref default_unbox_closures_factor      (* -unbox-closures-factor *)
 let remove_unused_arguments = ref false (* -remove-unused-arguments *)
+
+let visual_replay = ref false (* -visual-replay *)
 
 type inlining_arguments = {
   inline_call_cost : int option;
