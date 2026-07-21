@@ -2,6 +2,17 @@
 type t = unit
 
 
+(** making a print statement for a given file *)
+let print_function input =
+  let module_longident = Longident.Lident "Printf" in
+  let print_longident = Longident.Ldot (Location.mknoloc module_longident, Location.mknoloc "printf") in 
+  let print_function = Exp.ident (Location.mknoloc print_longident) in
+  let print_arg = Exp.constant {
+    pconst_desc = (Pconst_string (input, Location.none, None));
+    pconst_loc = Location.none} in
+  Exp.apply print_function [ (Nolabel, print_arg) ]
+
+
 let print_then_run exp = 
   Parsetree.Pexp_let (Asttypes.Nonrecursive, 
 
