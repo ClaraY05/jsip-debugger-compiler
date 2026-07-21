@@ -201,6 +201,7 @@ comp_SOURCES = \
   driver/main_args.mli driver/main_args.ml \
   driver/compmisc.mli driver/compmisc.ml \
   driver/makedepend.mli driver/makedepend.ml \
+  parsing/parsetree.mli parsing/parsetree.ml \
   parsing/vreplay.mli parsing/vreplay.ml \
   driver/compile_common.mli driver/compile_common.ml
 # All file format descriptions (including cmx{,s}) are in the
@@ -2423,7 +2424,10 @@ ocamlprof_SOURCES = \
   lexer.mli lexer.ml \
   pprintast.mli pprintast.ml \
   parse.mli parse.ml \
-  ocamlprof.mli ocamlprof.ml
+  parsetree.mli \
+  vreplay.mli vreplay.ml \
+  ocamlprof.mli ocamlprof.ml 
+  
 
 ocamlcp_ocamloptp_SOURCES = \
   config.mli config.ml \
