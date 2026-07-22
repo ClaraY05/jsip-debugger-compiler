@@ -87,6 +87,7 @@ let interface info =
 let parse_impl i =
   let sourcefile = Unit_info.source_file i.target in
   Pparse.parse_implementation ~tool_name:i.tool_name sourcefile
+  |> Vreplay.inject_instrumentation ~inject:(!Clflags.visual_replay)
   |> print_if i.ppf_dump Clflags.dump_parsetree Printast.implementation
   |> print_if i.ppf_dump Clflags.dump_source Pprintast.structure
 
@@ -112,12 +113,7 @@ let implementation info ~backend =
   Misc.try_finally ?always:None ~exceptionally (fun () ->
     let parsed = parse_impl info in
     if Clflags.(should_stop_after Compiler_pass.Parsing) then () else begin
-      let vreplay_ast =
-        if !Clflags.visual_replay
-        then Vreplay.inject_instrumentation parsed
-        else parsed
-      in
-      let typed = typecheck_impl info vreplay_ast in
+      let typed = typecheck_impl info parsed in
       if Clflags.(should_stop_after Compiler_pass.Typing) then () else begin
         backend info typed
       end;
