@@ -332,3 +332,5 @@ META
 /yacc/version.h
 /yacc/.gdb_history
 /.worktrees
+
+/.tmp_files

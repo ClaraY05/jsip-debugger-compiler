@@ -68,7 +68,7 @@ let inject_mapper =
   let inject_expression self (exp : Parsetree.expression) = 
     let recurse_down : Parsetree.expression = super.expr self exp in 
     
-    match exp.pexp_desc with 
+    match recurse_down.pexp_desc with 
     | Pexp_apply (func, args) ->
       ({  pexp_desc = print_then_run_node recurse_down func args
         ; pexp_loc = exp.pexp_loc

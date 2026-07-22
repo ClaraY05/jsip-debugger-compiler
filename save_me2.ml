@@ -65,12 +65,12 @@ let inject_mapper =
   let super = Ast_mapper.default_mapper in 
 
   (* this function injects a print before every function application *)
-  let inject_expression self (exp : Parsetree.expression) = 
+  let rec inject_expression self (exp : Parsetree.expression) = 
     let recurse_down : Parsetree.expression = super.expr self exp in 
     
-    match exp.pexp_desc with 
+    match recurse_down.pexp_desc with 
     | Pexp_apply (func, args) ->
-      ({  pexp_desc = print_then_run_node recurse_down func args
+      ({  pexp_desc = print_then_run_node recurse_down func (List.map (fun (x, y) -> (x, inject_expression self y)) args)
         ; pexp_loc = exp.pexp_loc
         ; pexp_loc_stack = exp.pexp_loc_stack
         ; pexp_attributes = exp.pexp_attributes

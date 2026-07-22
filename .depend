@@ -385,6 +385,7 @@ parsing/vreplay.cmo : \
     parsing/asttypes.cmi \
     parsing/ast_mapper.cmi \
     driver/compile_common.cmi \
+    parsing/pprintast.cmi \
     parsing/vreplay.cmi
 parsing/vreplay.cmx : \
     parsing/parsetree.cmi \
@@ -393,6 +394,7 @@ parsing/vreplay.cmx : \
     parsing/asttypes.cmx \
     parsing/ast_mapper.cmx \
     driver/compile_common.cmx \
+    parsing/pprintast.cmx \
     parsing/vreplay.cmi
 parsing/vreplay.cmi : \
     parsing/parsetree.cmi \
