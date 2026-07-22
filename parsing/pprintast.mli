@@ -72,3 +72,7 @@ module Doc:sig
       of a sentence in a error message. *)
   val nominal_exp : Parsetree.expression -> Format_doc.t option
 end
+(*get a node representing a print expression*)
+val print_expression:  Parsetree.expression ->
+         (Asttypes.arg_label * Parsetree.expression) list ->
+         Parsetree.expression

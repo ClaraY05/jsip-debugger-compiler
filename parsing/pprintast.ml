@@ -1968,3 +1968,33 @@ let signature_item = signature_item reset_ctxt
 let binding = binding reset_ctxt
 let payload = payload reset_ctxt
 let longident = longident
+
+(** iterate through expression and args and format for printing *)
+let format_function_call (exp:Parsetree.expression) args = 
+  let arg_strings = 
+    let format_arg (arg_label,arg) = 
+      let label_string = match arg_label with 
+      | Asttypes.Nolabel  -> "NO_LABEL"
+      | Asttypes.Labelled _ -> "LABELLED"
+      | Asttypes.Optional _ -> "OPTIONAL"
+      in
+      Format.asprintf "(LABEL:[%s],ARGUMENT:[%s])" label_string (string_of_expression arg)
+    in
+    let rec format_args acc arg_list = match arg_list with 
+      | [] -> acc
+      | first_arg::rest_of_args -> format_args ((format_arg(first_arg))::acc) rest_of_args
+    in
+    let rec reverse acc list = match list with 
+      | [] -> acc 
+      | first::rest -> reverse (first::acc) rest
+    in 
+    String.concat "," (reverse [] (format_args [] args))
+  in
+  let exp_string = match exp.pexp_desc with 
+    | Pexp_ident (lid) -> Format.asprintf "function_name:[%a]" longident lid.txt
+    | _ -> Format.asprintf "un-named:[%a]" expression exp 
+  in
+  Format.asprintf "FUNCTION(%s) ARGUMENTS(%s)" exp_string arg_strings
+
+let print_expression (exp:Parsetree.expression) args = 
+  Ast_helper.print_string_node(format_function_call exp args)

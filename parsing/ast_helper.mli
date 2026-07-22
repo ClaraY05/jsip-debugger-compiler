@@ -518,4 +518,4 @@ module Of:
   end
 
 (** making a print statement for a given file *)
-val print_function: string -> expression 
+val print_string_node:  string -> expression

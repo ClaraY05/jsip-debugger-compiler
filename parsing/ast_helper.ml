@@ -685,7 +685,7 @@ module Of = struct
 end
 
 (** making a print statement for a given file *)
-let print_function input =
+let print_string_node input =
   let module_longident = Longident.Lident "Printf" in
   let print_longident = Longident.Ldot (Location.mknoloc module_longident, Location.mknoloc "printf") in 
   let print_function = Exp.ident (Location.mknoloc print_longident) in
@@ -696,38 +696,31 @@ let print_function input =
 ;;
 
 (** iterate through expression and args and format for printing *)
-(*=let format_function_call (exp:Exp) args = 
-  let arg_string = 
-    let format_arg (arg_label:Asttypes.arg_label), (arg:Exp) = 
+let format_function_call (exp:Parsetree.expression) args = 
+  let arg_strings = 
+    let format_arg (arg_label,arg) = 
       let label_string = match arg_label with 
-      | Asttypes.arg_label.Nolabel _ -> "NO_LABEL"
-      | Asttypes.arg_label.Labelled _ -> "LABELLED"
-      | Asttypes.arg_label.Optional _ -> "OPTIONAL"
-      in 
-      Format.asprintf "(LABEL:[%s],ARGUMENT:[%a])" Pprintast.expression arg arg_label
+      | Asttypes.Nolabel  -> "NO_LABEL"
+      | Asttypes.Labelled _ -> "LABELLED"
+      | Asttypes.Optional _ -> "OPTIONAL"
+      in
+      Format.asprintf "(LABEL:[%s],ARGUMENT:[%s])" label_string (Pprintast.string_of_expression arg)
     in
     let rec format_args acc arg_list = match arg_list with 
       | [] -> acc
-      | first_arg::rest_of_args -> format_args format_function_call(first_arg)::acc rest_of_args
+      | first_arg::rest_of_args -> format_args ((format_arg(first_arg))::acc) rest_of_args
     in
     let rec reverse acc list = match list with 
       | [] -> acc 
-      | first::rest -> reverse first::acc rest
+      | first::rest -> reverse (first::acc) rest
     in 
-    reverse [] (format_args [] args)
+    String.concat "," (reverse [] (format_args [] args))
   in
-
-  let expression = match Exp.pexp_desc exp with 
-    | Pexp_ident (longident _) -> Format.asprintf "function_name:[%a]" Pprintast.longident lid
+  let expression = match exp.pexp_desc with 
+    | Pexp_ident (lid) -> Format.asprintf "function_name:[%a]" Pprintast.longident lid.txt
     | _ -> Format.asprintf "un-named:[%a]" Pprintast.expression exp 
   in
+  Format.asprintf "FUNCTION(%s) ARGUMENTS(%s)" expression arg_strings
 
-  Format.asprintf "FUNCTION(%s) ARGUMENTS(%s)" expression args
-;; *)
-let format_arg (arg_label,arg) = 
-  let label_string = match arg_label with 
-  | Asttypes.Nolabel  -> "NO_LABEL"
-  | Asttypes.Labelled _ -> "LABELLED"
-  | Asttypes.Optional _ -> "OPTIONAL"
-  in
-  Format.asprintf "(LABEL:[%s],ARGUMENT:[%s])" label_string (Pprintast.string_of_expression arg)
+let print_expression (exp:Parsetree.expression) args = 
+  print_string_node(format_function_call exp args)
