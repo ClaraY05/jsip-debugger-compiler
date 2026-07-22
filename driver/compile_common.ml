@@ -106,6 +106,7 @@ let parse_impl i =
   Pparse.parse_implementation
     ~tool_name:i.tool_name
     (Unit_info.human_source_file i.target)
+  |> Vreplay.inject_instrumentation ~inject:(!Clflags.visual_replay)
   |> Parse_result.update_unit_info ~info:i
   |> Parse_result.print_ast_if Clflags.dump_parsetree Printast.implementation
   |> Parse_result.print_ast_if Clflags.dump_source Pprintast.structure
@@ -132,12 +133,7 @@ let implementation info ~backend =
   Misc.try_finally ?always:None ~exceptionally (fun () ->
     let parse_result = parse_impl info in
     if Clflags.(should_stop_after Compiler_pass.Parsing) then () else begin
-      let vreplay_ast = 
-        if !Clflags.visual_replay 
-        then {parse_result with Parse_result.ast = Vreplay.inject_instrumentation parse_result.ast}
-        else parse_result 
-      in
-      let typed = typecheck_impl vreplay_ast in
+      let typed = typecheck_impl parse_result in
       if Clflags.(should_stop_after Compiler_pass.Typing) then () else begin
         backend info typed
       end;
