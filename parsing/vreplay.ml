@@ -1,11 +1,11 @@
 (** iterate through expression and args from a pexp_apply and format for printing *)
-let format_function_call exp (func:Parsetree.expression) args =
+let format_function_call (exp : Parsetree.expression) (func:Parsetree.expression) args =
  let arg_strings =
    let format_arg (arg_label,arg) =
      let label_string = match arg_label with
      | Asttypes.Nolabel  -> "NO_LABEL"
-     | Asttypes.Labelled _ -> "LABELLED"
-     | Asttypes.Optional _ -> "OPTIONAL"
+     | Asttypes.Labelled label -> Format.asprintf "LABELLED [%s]" label
+     | Asttypes.Optional label -> Format.asprintf "OPTIONAL [%s]" label
      in
      Format.asprintf "(LABEL:[%s],ARGUMENT:[%s])" label_string (Pprintast.string_of_expression arg)
    in
@@ -23,7 +23,8 @@ let format_function_call exp (func:Parsetree.expression) args =
    | Pexp_ident (lid) -> Format.asprintf "function_name:[%a]" Pprintast.longident lid.txt
    | _ -> Format.asprintf "unnamed:[%a]" Pprintast.expression func
  in
- Format.asprintf "FUNCTION(%s) ARGUMENTS(%s)\n" exp_string arg_strings
+ let location_string = Format.asprintf "%a" Location.print_loc exp.pexp_loc in 
+ Format.asprintf "FUNCTION(%s) ARGUMENTS(%s) LOCATION(%s)\n" exp_string arg_strings location_string
 
 (* print a generic string *)
 let print_string_node input =
@@ -67,7 +68,6 @@ let inject_mapper =
   (* this function injects a print before every function application *)
   let inject_expression self (exp : Parsetree.expression) = 
     let recurse_down : Parsetree.expression = super.expr self exp in 
-    
     match exp.pexp_desc with 
     | Pexp_apply (func, args) ->
       ({  pexp_desc = print_then_run_node recurse_down func args
@@ -84,7 +84,3 @@ let inject_mapper =
 
   (* exposed for compile_commmon *)
 let inject_instrumentation ~inject ast = if inject then inject_mapper.Ast_mapper.structure inject_mapper ast else ast
-
-
-
-(* TODO: make it recursive, ignore function bodies *)
