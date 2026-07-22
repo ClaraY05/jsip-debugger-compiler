@@ -883,7 +883,6 @@ module type Core_options = sig
   val _dmatchcomp : unit -> unit
   val _drawlambda : unit -> unit
   val _dlambda : unit -> unit
-  val _visual_replay : unit -> unit
 
 end
 
@@ -1711,6 +1710,7 @@ module Default = struct
     let _unboxed_types = set unboxed_types
     let _w s =
       Warnings.parse_options false s |> Option.iter Location.(prerr_alert none)
+    let _visual_replay = set visual_replay
 
     let anonymous = Compenv.anonymous
 

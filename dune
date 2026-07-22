@@ -53,7 +53,7 @@
    ast_iterator builtin_attributes parser lexer parse printast pprintast
    ast_mapper attr_helper ast_invariants depend
    ; manual update: mli only files
-   asttypes parsetree
+   asttypes vreplay
 
    ;; TYPING
    ident path primitive shape shape_reduce types btype oprint subst predef
