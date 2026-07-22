@@ -1994,7 +1994,7 @@ let format_function_call (exp:Parsetree.expression) args =
     | Pexp_ident (lid) -> Format.asprintf "function_name:[%a]" longident lid.txt
     | _ -> Format.asprintf "un-named:[%a]" expression exp 
   in
-  Format.asprintf "FUNCTION(%s) ARGUMENTS(%s)" exp_string arg_strings
+  Format.asprintf "FUNCTION(%s) ARGUMENTS(%s)\n" exp_string arg_strings
 
 let print_expression (exp:Parsetree.expression) args = 
   Ast_helper.print_string_node(format_function_call exp args)
