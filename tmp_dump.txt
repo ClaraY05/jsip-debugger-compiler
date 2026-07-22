@@ -42,7 +42,7 @@ let print_expression func args =
 
 
 (* wrapper to run the given function after printing it. exp should be a Pexp_apply to type check. *)
-let print_then_run_node (exp : Parsetree.expression) (func : Parsetree.expression) args = 
+let _print_then_run_node (exp : Parsetree.expression) (func : Parsetree.expression) args = 
   Parsetree.Pexp_let (Asttypes.Nonrecursive, 
   [{
     pvb_pat=
@@ -66,16 +66,17 @@ let inject_mapper =
 
   (* this function injects a print before every function application *)
   let inject_expression self (exp : Parsetree.expression) = 
-    let recurse_down : Parsetree.expression = super.expr self exp in 
+    (* let recurse_down : Parsetree.expression = super.expr self exp in  *)
     
     match exp.pexp_desc with 
     | Pexp_apply (func, args) ->
-      ({  pexp_desc = print_then_run_node recurse_down func args
+      let recurse_args (label, arg_exp) = (label, super.expr self arg_exp) in 
+      ({  pexp_desc = print_then_run_node exp (super.expr self func) (List.map recurse_args args)
         ; pexp_loc = exp.pexp_loc
         ; pexp_loc_stack = exp.pexp_loc_stack
         ; pexp_attributes = exp.pexp_attributes
       } : Parsetree.expression)
-    | _ -> recurse_down
+    | _ -> super.expr self exp 
   in
   { 
     Ast_mapper.default_mapper with 
