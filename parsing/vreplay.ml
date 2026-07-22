@@ -1,5 +1,5 @@
 (** iterate through expression and args from a pexp_apply and format for printing *)
-let format_function_call (func:Parsetree.expression) args =
+let format_function_call exp (func:Parsetree.expression) args =
  let arg_strings =
    let format_arg (arg_label,arg) =
      let label_string = match arg_label with
@@ -37,8 +37,8 @@ let print_string_node input =
 ;;
 
 (* wrapper to print a function call *)
-let print_expression func args =
-  print_string_node (format_function_call func args)
+let print_expression exp func args =
+  print_string_node (format_function_call exp func args)
 
 
 (* wrapper to run the given function after printing it. exp should be a Pexp_apply to type check. *)
@@ -51,7 +51,7 @@ let print_then_run_node (exp : Parsetree.expression) (func : Parsetree.expressio
       ; ppat_loc_stack=exp.pexp_loc_stack
       ; ppat_attributes=exp.pexp_attributes
       }
-  ; pvb_expr= print_expression func args
+  ; pvb_expr= print_expression exp func args
   ; pvb_constraint=None
   ; pvb_attributes=exp.pexp_attributes
   ; pvb_loc=exp.pexp_loc
