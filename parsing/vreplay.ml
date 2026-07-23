@@ -3,9 +3,9 @@ let format_function_call (exp : Parsetree.expression) (func:Parsetree.expression
  let arg_strings =
    let format_arg (arg_label,arg) =
      let label_string = match arg_label with
-     | Asttypes.Nolabel  -> "NO_LABEL"
-     | Asttypes.Labelled label -> Format.asprintf "LABELLED [%s]" label
-     | Asttypes.Optional label -> Format.asprintf "OPTIONAL [%s]" label
+     | Asttypes.Nolabel  -> "{NO_LABEL}{NONE}"
+     | Asttypes.Labelled label -> Format.asprintf "{LABELLED}{%s}" label
+     | Asttypes.Optional label -> Format.asprintf "{OPTIONAL}{%s}" label
      in
      Format.asprintf "(LABEL:[%s],ARGUMENT:[%s])" label_string (Pprintast.string_of_expression arg)
    in
