@@ -3,9 +3,9 @@ let format_function_call (exp : Parsetree.expression) (func:Parsetree.expression
  let arg_strings =
    let format_arg (arg_label,arg) =
      let label_string = match arg_label with
-     | Asttypes.Nolabel  -> "{NO_LABEL}{NONE}"
-     | Asttypes.Labelled label -> Format.asprintf "{LABELLED}{%s}" label
-     | Asttypes.Optional label -> Format.asprintf "{OPTIONAL}{%s}" label
+     | Asttypes.Nolabel  -> "NO_LABEL NONE"
+     | Asttypes.Labelled label -> Format.asprintf "LABELLED %s" label
+     | Asttypes.Optional label -> Format.asprintf "OPTIONAL %s" label
      in
      Format.asprintf "(LABEL:[%s],ARGUMENT:[%s])" label_string (Pprintast.string_of_expression arg)
    in
@@ -24,7 +24,7 @@ let format_function_call (exp : Parsetree.expression) (func:Parsetree.expression
    | _ -> Format.asprintf "unnamed:[%a]" Pprintast.expression func
  in
  let location_string = Format.asprintf "%a" Location.print_loc exp.pexp_loc in 
- Format.asprintf "FUNCTION(%s) ARGUMENTS(%s) LOCATION(%s)\n" exp_string arg_strings location_string
+ Format.asprintf "{FUNCTION(%s) ARGUMENTS(%s) LOCATION(%s)\n" exp_string arg_strings location_string
 
 (* print a generic string *)
 let print_string_node input =
@@ -44,6 +44,7 @@ let print_expression exp func args =
 
 (* wrapper to run the given function after printing it. exp should be a Pexp_apply to type check. *)
 let print_then_run_node (exp : Parsetree.expression) (func : Parsetree.expression) args = 
+  (* First print out the function information *)
   Parsetree.Pexp_let (Asttypes.Nonrecursive, 
   [{
     pvb_pat=
@@ -57,8 +58,36 @@ let print_then_run_node (exp : Parsetree.expression) (func : Parsetree.expressio
   ; pvb_attributes=exp.pexp_attributes
   ; pvb_loc=exp.pexp_loc
   }]
-   (* This is a pattern for let () = ... *)
-  , exp)
+   (* Then evaluate the function and bind to res *)
+  , Ast_helper.Exp.mk (Parsetree.Pexp_let (Asttypes.Nonrecursive, 
+  [{
+    pvb_pat=
+      { ppat_desc=Parsetree.Ppat_var (Location.mknoloc "res")
+      ; ppat_loc=exp.pexp_loc
+      ; ppat_loc_stack=exp.pexp_loc_stack
+      ; ppat_attributes=exp.pexp_attributes
+      }
+  ; pvb_expr= exp
+  ; pvb_constraint=None
+  ; pvb_attributes=exp.pexp_attributes
+  ; pvb_loc=exp.pexp_loc
+  }]
+   (* Print out the ending bracket *)
+  , Ast_helper.Exp.mk (Parsetree.Pexp_let (Asttypes.Nonrecursive, 
+  [{
+    pvb_pat=
+      { ppat_desc=Parsetree.Ppat_construct (Location.mknoloc (Longident.Lident "()"), None)
+      ; ppat_loc=exp.pexp_loc
+      ; ppat_loc_stack=exp.pexp_loc_stack
+      ; ppat_attributes=exp.pexp_attributes
+      }
+  ; pvb_expr= print_string_node "}"
+  ; pvb_constraint=None
+  ; pvb_attributes=exp.pexp_attributes
+  ; pvb_loc=exp.pexp_loc
+  }]
+   (* "return" the result *)
+  , Ast_helper.Exp.mk (Parsetree.Pexp_ident (Location.mknoloc (Longident.Lident "res"))))))))
 
 
   (* This is our special mapper that changes pexp_applies *)
@@ -84,3 +113,13 @@ let inject_mapper =
 
   (* exposed for compile_commmon *)
 let inject_instrumentation ~inject ast = if inject then inject_mapper.Ast_mapper.structure inject_mapper ast else ast
+
+
+(* - we need to separate out function body pexp_applies
+- At actual pexp_applies, we need to calculate some notion of depth
+- then add this calculated depth to the function body depth. 
+
+
+
+- it's near impossible to reach back into the function body at the actual pexp apply time (unless we store all functions which seems unnecessary/impractical)
+- let's instead just put parens around function calls and then parse them interface-side *)
