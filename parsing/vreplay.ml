@@ -7,7 +7,7 @@ let format_function_call (exp : Parsetree.expression) (func:Parsetree.expression
      | Asttypes.Labelled label -> Format.asprintf "LABELLED %s" label
      | Asttypes.Optional label -> Format.asprintf "OPTIONAL %s" label
      in
-     Format.asprintf "(LABEL:[%s],ARGUMENT:[%s])" label_string (Pprintast.string_of_expression arg)
+     Format.asprintf "LABEL:[%s],ARGUMENT:[%s]" label_string (Pprintast.string_of_expression arg)
    in
    let rec format_args acc arg_list = match arg_list with
      | [] -> acc
