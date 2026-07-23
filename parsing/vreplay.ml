@@ -17,7 +17,7 @@ let format_function_call (exp : Parsetree.expression) (func:Parsetree.expression
      | [] -> acc
      | first::rest -> reverse (first::acc) rest
    in
-   String.concat "," (reverse [] (format_args [] args))
+   String.concat ";" (reverse [] (format_args [] args))
  in
  let exp_string = match func.pexp_desc with
    | Pexp_ident (lid) -> Format.asprintf "function_name:[%a]" Pprintast.longident lid.txt
