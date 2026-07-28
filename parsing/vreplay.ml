@@ -1,30 +1,39 @@
-(** iterate through expression and args from a pexp_apply and format for printing *)
-let format_function_call (exp : Parsetree.expression) (func:Parsetree.expression) args =
- let arg_strings =
-   let format_arg (arg_label,arg) =
-     let label_string = match arg_label with
-     | Asttypes.Nolabel  -> "NO_LABEL NONE"
-     | Asttypes.Labelled label -> Format.asprintf "LABELLED %s" label
-     | Asttypes.Optional label -> Format.asprintf "OPTIONAL %s" label
-     in
-     Format.asprintf "LABEL:[%s],ARGUMENT:[%s]" label_string (Pprintast.string_of_expression arg)
-   in
-   let rec format_args acc arg_list = match arg_list with
-     | [] -> acc
-     | first_arg::rest_of_args -> format_args ((format_arg(first_arg))::acc) rest_of_args
-   in
-   let rec reverse acc list = match list with
-     | [] -> acc
-     | first::rest -> reverse (first::acc) rest
-   in
-   String.concat ";" (reverse [] (format_args [] args))
- in
- let exp_string = match func.pexp_desc with
-   | Pexp_ident (lid) -> Format.asprintf "function_name:[%a]" Pprintast.longident lid.txt
-   | _ -> Format.asprintf "unnamed:[%a]" Pprintast.expression func
- in
- let location_string = Format.asprintf "%a" Location.print_loc exp.pexp_loc in 
- Format.asprintf "{FUNCTION(%s) ARGUMENTS(%s) LOCATION(%s)\n" exp_string arg_strings location_string
+(* open! Parsetree *)
+
+module Wire = struct
+  type t = {
+      location: string
+      ; function_type: string
+      ; function_data: string
+      ; argument_list: (string * string) list
+  }
+  [@@deriving sexp]
+
+  let format_function_call (exp : Parsetree.expression) (func:Parsetree.expression) args = 
+    let location = Format.asprintf "%a" Location.print_loc exp.pexp_loc in
+    let function_type, function_data = match func.pexp_desc with
+    | Pexp_ident (lid) -> "Function_name", Format.asprintf "%a" Pprintast.longident lid.txt
+    | _ -> "Unnamed", Format.asprintf "%a" Pprintast.expression func
+    in
+    let argument_list =
+      let format_arg (arg_label,arg) = match arg_label with
+        | Asttypes.Nolabel  -> "NO_LABEL", ""
+        | Asttypes.Labelled label -> "LABELLED", Format.asprintf "%s" label
+        | Asttypes.Optional label -> "OPTIONAL", Format.asprintf "%s" label
+      in
+      let rec format_args acc arg_list = match arg_list with
+        | [] -> acc
+        | first_arg::rest_of_args -> format_args ((format_arg(first_arg))::acc) rest_of_args
+      in
+      let rec reverse acc list = match list with
+        | [] -> acc
+        | first::rest -> reverse (first::acc) rest
+      in
+      reverse [] (format_args [] args)
+    in
+    {location; function_type; function_data; argument_list}
+  ;;
+end
 
 (* print a generic string *)
 let print_string_node input =
@@ -39,7 +48,8 @@ let print_string_node input =
 
 (* wrapper to print a function call *)
 let print_expression exp func args =
-  print_string_node (format_function_call exp func args)
+  let wire_data = Wire.format_function_call exp func args in
+  print_string_node (Sexplib.Sexp.to_string_hum (Wire.sexp_of_t wire_data))
 
 
 (* wrapper to run the given function after printing it. exp should be a Pexp_apply to type check. *)
