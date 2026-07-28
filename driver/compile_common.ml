@@ -87,7 +87,6 @@ let interface info =
 let parse_impl i =
   let sourcefile = Unit_info.source_file i.target in
   Pparse.parse_implementation ~tool_name:i.tool_name sourcefile
-  |> Vreplay.inject_instrumentation ~inject:(!Clflags.visual_replay)
   |> print_if i.ppf_dump Clflags.dump_parsetree Printast.implementation
   |> print_if i.ppf_dump Clflags.dump_source Pprintast.structure
 
@@ -95,6 +94,7 @@ let typecheck_impl i parsetree =
   parsetree
   |> Profile.(record typing)
     (Typemod.type_implementation i.target i.env)
+  |> Vreplay_instrumentation.inject_instrumentation ~inject:(!Clflags.visual_replay)
   |> print_if i.ppf_dump Clflags.dump_typedtree
     Printtyped.implementation_with_coercion
   |> print_if i.ppf_dump Clflags.dump_shape

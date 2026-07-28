@@ -108,8 +108,7 @@ parsing_SOURCES = $(addprefix parsing/, \
   ast_mapper.mli ast_mapper.ml \
   attr_helper.mli attr_helper.ml \
   ast_invariants.mli ast_invariants.ml \
-  depend.mli depend.ml \
-  vreplay.mli vreplay.ml )
+  depend.mli depend.ml )
 
 typing_SOURCES = \
   typing/annot.mli \
@@ -169,6 +168,7 @@ typing_SOURCES = \
   typing/typecore.mli typing/typecore.ml \
   typing/typeclass.mli typing/typeclass.ml \
   typing/typemod.mli typing/typemod.ml \
+  vreplay_instrumentation.mli vreplay_instrumentation.ml \
 
 lambda_SOURCES = $(addprefix lambda/, \
   debuginfo.mli debuginfo.ml \
