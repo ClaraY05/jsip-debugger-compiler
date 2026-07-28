@@ -376,28 +376,6 @@ parsing/camlinternalMenhirLib.cmo : \
 parsing/camlinternalMenhirLib.cmx : \
     parsing/camlinternalMenhirLib.cmi
 parsing/camlinternalMenhirLib.cmi :
-parsing/vreplay.cmo : \
-    parsing/parsetree.cmi \
-    utils/misc.cmi \
-    parsing/longident.cmi \
-    parsing/location.cmi \
-    parsing/asttypes.cmi \
-    parsing/ast_mapper.cmi \
-    driver/compile_common.cmi \
-    parsing/pprintast.cmi \
-    parsing/vreplay.cmi
-parsing/vreplay.cmx : \
-    parsing/parsetree.cmi \
-    parsing/longident.cmx \
-    parsing/location.cmx \
-    parsing/asttypes.cmx \
-    parsing/ast_mapper.cmx \
-    driver/compile_common.cmx \
-    parsing/pprintast.cmx \
-    parsing/vreplay.cmi
-parsing/vreplay.cmi : \
-    parsing/parsetree.cmi \
-    driver/compile_common.cmi
 parsing/depend.cmo : \
     parsing/parsetree.cmi \
     utils/misc.cmi \
@@ -578,6 +556,11 @@ parsing/printast.cmx : \
     parsing/printast.cmi
 parsing/printast.cmi : \
     parsing/parsetree.cmi
+parsing/snapshot.cmo : \
+    parsing/snapshot.cmi
+parsing/snapshot.cmx : \
+    parsing/snapshot.cmi
+parsing/snapshot.cmi :
 parsing/syntaxerr.cmo : \
     parsing/location.cmi \
     parsing/syntaxerr.cmi
@@ -601,6 +584,24 @@ parsing/unit_info.cmx : \
     utils/config.cmx \
     parsing/unit_info.cmi
 parsing/unit_info.cmi :
+parsing/vreplay.cmo : \
+    parsing/parsetree.cmi \
+    parsing/longident.cmi \
+    parsing/location.cmi \
+    parsing/asttypes.cmi \
+    parsing/ast_mapper.cmi \
+    parsing/ast_helper.cmi \
+    parsing/vreplay.cmi
+parsing/vreplay.cmx : \
+    parsing/parsetree.cmi \
+    parsing/longident.cmx \
+    parsing/location.cmx \
+    parsing/asttypes.cmx \
+    parsing/ast_mapper.cmx \
+    parsing/ast_helper.cmx \
+    parsing/vreplay.cmi
+parsing/vreplay.cmi : \
+    parsing/parsetree.cmi
 typing/annot.cmi : \
     parsing/location.cmi
 typing/btype.cmo : \
@@ -7075,6 +7076,7 @@ driver/compile.cmi : \
     utils/clflags.cmi
 driver/compile_common.cmo : \
     utils/warnings.cmi \
+    parsing/vreplay.cmi \
     parsing/unit_info.cmi \
     typing/typemod.cmi \
     typing/typedtree.cmi \
@@ -7095,6 +7097,7 @@ driver/compile_common.cmo : \
     driver/compile_common.cmi
 driver/compile_common.cmx : \
     utils/warnings.cmx \
+    parsing/vreplay.cmx \
     parsing/unit_info.cmx \
     typing/typemod.cmx \
     typing/typedtree.cmx \

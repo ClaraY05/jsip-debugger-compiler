@@ -89,6 +89,7 @@ utils_SOURCES = $(addprefix utils/, \
   compression.mli compression.ml)
 
 parsing_SOURCES = $(addprefix parsing/, \
+  snapshot.mli snapshot.ml \
   location.mli location.ml \
   unit_info.mli unit_info.ml \
   asttypes.mli asttypes.ml \
@@ -1252,6 +1253,7 @@ runtime_COMMON_C_SOURCES = \
   shared_heap \
   signals \
   skiplist \
+  snapshot \
   startup_aux \
   str \
   sync \
