@@ -377,7 +377,7 @@ parsing/camlinternalMenhirLib.cmo : \
 parsing/camlinternalMenhirLib.cmx : \
     parsing/camlinternalMenhirLib.cmi
 parsing/camlinternalMenhirLib.cmi :
-parsing/vreplay.cmo : \
+typing/vreplay_instrumentation.cmo : \
     parsing/parsetree.cmi \
     utils/misc.cmi \
     parsing/longident.cmi \
@@ -385,9 +385,17 @@ parsing/vreplay.cmo : \
     parsing/asttypes.cmi \
     parsing/ast_mapper.cmi \
     driver/compile_common.cmi \
+    typing/typedtree.cmi  \
     parsing/pprintast.cmi \
-    parsing/vreplay.cmi
-parsing/vreplay.cmx : \
+    typing/typecore.cmi \
+    typing/shape.cmi \
+    typing/ident.cmi \
+    typing/value_rec_types.cmi \
+    typing/predef.cmi \
+    typing/path.cmi \
+    typing/tast_mapper.cmi \
+    typing/vreplay_instrumentation.cmi
+typing/vreplay_instrumentation.cmx : \
     parsing/parsetree.cmi \
     parsing/longident.cmx \
     parsing/location.cmx \
@@ -395,10 +403,17 @@ parsing/vreplay.cmx : \
     parsing/ast_mapper.cmx \
     driver/compile_common.cmx \
     parsing/pprintast.cmx \
-    parsing/vreplay.cmi
-parsing/vreplay.cmi : \
-    parsing/parsetree.cmi \
-    driver/compile_common.cmi
+    typing/typecore.cmx \
+    typing/shape.cmx \
+    typing/ident.cmx \
+    typing/value_rec_types.cmx \
+    typing/predef.cmx \
+    typing/path.cmx \
+    typing/tast_mapper.cmx \
+    typing/typedtree.cmx  \
+    typing/vreplay_instrumentation.cmi
+typing/vreplay_instrumentation.cmi : \
+    typing/typedtree.cmi 
 parsing/depend.cmo : \
     parsing/parsetree.cmi \
     utils/misc.cmi \

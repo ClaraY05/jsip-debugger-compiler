@@ -1,0 +1,1 @@
+An event is defined as every time a known data structure (as recorded in our DS traversal info table) is created or manipulated
