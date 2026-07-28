@@ -1,6 +1,6 @@
 (* open! Parsetree *)
 
-module Wire = struct
+(*module Wire = struct
   type t = {
       location: string
       ; function_type: string
@@ -33,10 +33,10 @@ module Wire = struct
     in
     {location; function_type; function_data; argument_list}
   ;;
-end
+end*)
 
 (* print a generic string *)
-let print_string_node input =
+(*=let print_string_node input =
  let module_longident = Longident.Lident "Printf" in
  let print_longident = Longident.Ldot (Location.mknoloc module_longident, Location.mknoloc "printf") in
  let print_function = Ast_helper.Exp.ident (Location.mknoloc print_longident) in
@@ -44,16 +44,21 @@ let print_string_node input =
    pconst_desc = (Pconst_string (input, Location.none, None));
    pconst_loc = Location.none} in
  Ast_helper.Exp.apply print_function [ (Nolabel, print_arg) ]
+;;*)
+
+(* call a c function *)
+let call_c_node input =
+ let module_longident = Longident.Lident "Snapshot" in
+ let callc_longident = Longident.Ldot (Location.mknoloc module_longident, Location.mknoloc "emit") in
+ let callc_function = Ast_helper.Exp.ident (Location.mknoloc callc_longident) in
+ let callc_arg = Ast_helper.Exp.constant {
+   pconst_desc = (Pconst_string (input, Location.none, None));
+   pconst_loc = Location.none} in
+ Ast_helper.Exp.apply callc_function [ (Nolabel, callc_arg) ]
 ;;
 
-(* wrapper to print a function call *)
-let print_expression exp func args =
-  let wire_data = Wire.format_function_call exp func args in
-  print_string_node (Sexplib.Sexp.to_string_hum (Wire.sexp_of_t wire_data))
-
-
 (* wrapper to run the given function after printing it. exp should be a Pexp_apply to type check. *)
-let print_then_run_node (exp : Parsetree.expression) (func : Parsetree.expression) args = 
+let print_then_run_node (exp : Parsetree.expression) (_func : Parsetree.expression) _args = 
   (* First print out the function information *)
   Parsetree.Pexp_let (Asttypes.Nonrecursive, 
   [{
@@ -63,7 +68,7 @@ let print_then_run_node (exp : Parsetree.expression) (func : Parsetree.expressio
       ; ppat_loc_stack=exp.pexp_loc_stack
       ; ppat_attributes=exp.pexp_attributes
       }
-  ; pvb_expr= print_expression exp func args
+  ; pvb_expr= call_c_node "meow"
   ; pvb_constraint=None
   ; pvb_attributes=exp.pexp_attributes
   ; pvb_loc=exp.pexp_loc
@@ -82,22 +87,8 @@ let print_then_run_node (exp : Parsetree.expression) (func : Parsetree.expressio
   ; pvb_attributes=exp.pexp_attributes
   ; pvb_loc=exp.pexp_loc
   }]
-   (* Print out the ending bracket *)
-  , Ast_helper.Exp.mk (Parsetree.Pexp_let (Asttypes.Nonrecursive, 
-  [{
-    pvb_pat=
-      { ppat_desc=Parsetree.Ppat_construct (Location.mknoloc (Longident.Lident "()"), None)
-      ; ppat_loc=exp.pexp_loc
-      ; ppat_loc_stack=exp.pexp_loc_stack
-      ; ppat_attributes=exp.pexp_attributes
-      }
-  ; pvb_expr= print_string_node "}"
-  ; pvb_constraint=None
-  ; pvb_attributes=exp.pexp_attributes
-  ; pvb_loc=exp.pexp_loc
-  }]
    (* "return" the result *)
-  , Ast_helper.Exp.mk (Parsetree.Pexp_ident (Location.mknoloc (Longident.Lident "res"))))))))
+  , Ast_helper.Exp.mk (Parsetree.Pexp_ident (Location.mknoloc (Longident.Lident "res"))))))
 
 
   (* This is our special mapper that changes pexp_applies *)

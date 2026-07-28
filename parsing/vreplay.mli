@@ -1,6 +1,6 @@
 (* open! Parsetree *)
 
-module Wire : sig
+(*=module Wire : sig
   type t = {
       location: string
       ; function_type: string
@@ -10,6 +10,6 @@ module Wire : sig
   [@@deriving sexp]
 
   val format_function_call :  Parsetree.expression -> Parsetree.expression -> (Asttypes.arg_label * Parsetree.expression) list -> t
-end
+end*)
 
 val inject_instrumentation : inject : Bool.t -> Parsetree.structure  -> Parsetree.structure 
