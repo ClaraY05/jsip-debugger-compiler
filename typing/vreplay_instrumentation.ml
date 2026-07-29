@@ -46,6 +46,9 @@ end
    agree. *)
 let wire_emit_name = "__wire_emit"
 
+(* the C primitive behind it, defined in runtime/snapshot.c *)
+let wire_emit_prim_name = "caml_wire_emit"
+
 let wire_external =
   let ty_constr name =
     Ast_helper.Typ.constr (Location.mknoloc (Longident.Lident name)) []
@@ -54,18 +57,15 @@ let wire_external =
     Ast_helper.Typ.arrow Nolabel (ty_constr "string") (ty_constr "unit")
   in
   Ast_helper.Prim.mk_decl
-    ~prim:[ "caml_wire_emit" ]
+    ~prim:[ wire_emit_prim_name ]
     (Location.mknoloc wire_emit_name)
     emit_type
 
-(* name of the binding that holds an instrumented call's result. the
-   follow-up that hands the traversal root to the runtime registry will
-   refer to it by name (typing a call against the env it is bound in),
-   so the declaration in [inject_then_run_node] and those call sites
-   must agree, like [wire_emit_name] above. *)
+(* the binding that holds an instrumented call's result. future call sites
+   will refer to it by name, so declaration and uses must agree. *)
 let res_binder_name = "__vreplay_res"
 
-(* call a c function *)
+(* the untyped call [__wire_emit <input>] *)
 let call_c_node input =
  let callc_function =
    Ast_helper.Exp.ident (Location.mknoloc (Longident.Lident wire_emit_name)) in
@@ -86,9 +86,8 @@ let frame_close = "}"
    whatever replaces this has to terminate its own record *)
 let placeholder_record = "meow\n"
 
-(* stand-in for the traversal-root hand-off: marks where in the frame
-   the call passing [res_binder_name]'s value to the runtime registry
-   will run, once that C entry point exists. same newline rule. *)
+(* stand-in for the traversal-root hand-off, until the runtime registry's
+   C entry point exists. same newline rule. *)
 let root_placeholder = "ROOT\n"
 
 (* a synthesized expression: parent supplies only the loc. attributes stay
@@ -102,18 +101,14 @@ let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
   ; exp_env
   ; exp_attributes=[]}
 
-(* wrapper to run [exp] after doing some instrumentation [inject] along with
-   enclosing frame markers. exp should be a Texp_apply to type check. *)
-(* This returns an exp_desc, not an actual exp. *)
-(* [inject] and [inject_after] produce arbitrary already-typed expressions --
-   we deliberately don't care what they do or what type they have, since the
-   real instrumentation will be a lot more than one emit. they write records
-   and terminate them; we own only the markers either side. each is handed
-   the env at its sequencing point: [inject] the env before the call,
-   [inject_after] the env in which [res_binder_name] holds the call's
-   result -- it runs between that binding and the closing marker, so it can
-   observe the result, and if the call raises it never runs. [emit] is
-   passed in because only the caller's env has [wire_emit_name] in scope. *)
+(* wrap [exp] (a Texp_apply) in frame markers plus instrumentation; returns
+   an exp_desc. [inject] and [inject_after] produce arbitrary already-typed
+   expressions -- what they do is deliberately not our business; they own
+   record termination, we own the markers. each receives the env at its
+   sequencing point: [inject] before the call, [inject_after] with the
+   result bound to [res_binder_name] -- it can observe the result, and a
+   raising call skips it. [emit] comes from the caller, whose env has
+   [wire_emit_name] in scope. *)
 let inject_then_run_node ?inject_after (exp : Typedtree.expression)
       ~(emit : Env.t -> string -> Typedtree.expression)
       ~(inject : Env.t -> Typedtree.expression) =
@@ -127,11 +122,9 @@ let inject_then_run_node ?inject_after (exp : Typedtree.expression)
     ; val_uid=res_uid}
   in
   let env_with_res = Env.add_value res_ident res_val_desc exp.exp_env in
-  (* evaluate [rhs] for effect, then run [body]. pat_type comes from [rhs]
-     rather than [Predef.type_unit] so the rhs isn't forced to be unit --
-     the value is dropped either way, since [Matching.for_let] turns a
-     [Tpat_any] binding into an [Lsequence] without ever reading
-     pat_type. *)
+  (* evaluate [rhs] for effect, then run [body]. the rhs needn't be unit:
+     pat_type is never read -- [Matching.for_let] compiles a [Tpat_any]
+     binding to an [Lsequence]. *)
   let seq env (rhs : Typedtree.expression) body =
     mk_exp exp env exp.exp_type (Typedtree.Texp_let
       (Asttypes.Nonrecursive,
@@ -160,14 +153,11 @@ let inject_then_run_node ?inject_after (exp : Typedtree.expression)
   let close_then_return =
     seq env_with_res (emit env_with_res frame_close) read_result
   in
-  (* the post-call instrumentation, if any, goes between the result
-     binding and the closing marker *)
   let after_close_then_return =
     match inject_after with
     | None -> close_then_return
     | Some hook -> seq env_with_res (hook env_with_res) close_then_return
   in
-  (* evaluate the call and bind its result *)
   let bind_result_then_rest =
     mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
       (Asttypes.Nonrecursive,
@@ -194,51 +184,36 @@ let inject_then_run_node ?inject_after (exp : Typedtree.expression)
   in
   whole.exp_desc
 
-(* whether operations on a structure return it (traverse the result) or
-   update it in place (traverse the mutated argument, after the call).
-   [Mutable] joins in phase 2 along with the argument root -- declaring
-   it before anything constructs it would trip warning 37. *)
+(* [Immutable] ops return the structure: the traversal root is the result.
+   [Mutable] (phase 2) will root at the mutated argument instead; declaring
+   the constructor before anything builds it trips warning 37. *)
 type mutability = Immutable
 
-(* the "DS traversal info table" (vreplay/README.md): the compilation
-   units whose structures the replay knows how to traverse, keyed on the
-   unit that declared the functions and types -- see [uid_comp_unit].
-   phase 1 is Map only; "Stdlib__Set", Immutable would be one more line,
-   mutable modules ("Stdlib__Hashtbl") also need the phase-2 root. *)
+(* the "DS traversal info table" (vreplay/README.md): declaring units of
+   the structures the replay can traverse. extend with e.g.
+   "Stdlib__Set", Immutable. *)
 let ds_table : (string * mutability) list =
   [ "Stdlib__Map", Immutable ]
 
-(* where an event's traversal root lives. [Result]: the call returns the
-   new structure (immutable DS). phase 2, mutable DS, adds
-   [Argument of int]: the mutated argument, read after the call. two
-   traps to remember then: the index must count only [Arg]s ([Omitted]
-   sits in place in the list on labelled partial application), and
-   referring to an argument post-call must not re-evaluate or reorder it
-   -- arguments are applied right-to-left, so the safe subset is an
-   argument that is syntactically an ident. *)
+(* where an event's traversal root lives. phase 2 adds [Argument of int]
+   for mutable DS -- then the index must skip [Omitted]s, and only an
+   argument that is syntactically an ident can be re-read post-call
+   without re-evaluating or reordering (application is right-to-left). *)
 type root = Result
 
-(* the compilation unit a declaration originates from. uids are minted
-   where a declaration is written and copied verbatim by [Subst], so
-   they survive functor application, [include], [open] and aliasing:
-   [Map.Make(K).add] still says "Stdlib__Map". [Local_opaque_item] is
-   the deliberate exception -- it marks access through a functor
-   parameter or a first-class module, where the true origin is
-   unknowable at compile time, and it carries the *using* unit -- so it
-   must not count as provenance. fail closed on it and the rest. *)
+(* the unit a declaration originates from: [Subst] copies uids verbatim,
+   so this survives functor application, [include], [open] and aliasing.
+   [Local_opaque_item] (functor params, first-class modules) names the
+   *using* unit, not the origin -- fail closed on it and the rest. *)
 let uid_comp_unit : Shape.Uid.t -> string option = function
   | Shape.Uid.Item { comp_unit; _ } -> Some comp_unit
   | Shape.Uid.Compilation_unit _ | Shape.Uid.Local_opaque_item _
   | Shape.Uid.Internal | Shape.Uid.Predef _ -> None
 
-(* an immutable-DS call is an event iff it returns the structure: the
-   result type's head constructor must be declared in the same unit as
-   the function. the one check excludes queries ([find]/[mem]/
-   [cardinal]), iteration ([iter]/[bindings]/[to_seq]) and partial
-   application (the head is an arrow, including the [Omitted]-argument
-   form). known over-approximations, both harmless in that they only
-   re-observe a structure that already exists: [find] on a map whose
-   values are maps, and [fold] whose accumulator is a map. *)
+(* the result type's head constructor is declared in [comp_unit]: what an
+   immutable-DS event returns. excludes queries, iteration and partial
+   application in one check; over-approximates harmlessly on e.g. [find]
+   over a map of maps (re-observes an existing map). *)
 let returns_the_structure comp_unit (exp : Typedtree.expression) =
   match
     Types.get_desc (Ctype.expand_head_nolink exp.exp_env exp.exp_type)
@@ -254,12 +229,10 @@ let returns_the_structure comp_unit (exp : Typedtree.expression) =
     end
   | _ -> false
 
-(* Decides whether the application [exp], whose function part is [func],
-   is an event, and if so where its traversal root lives. [None] means
-   don't instrument. deliberate misses: [M.empty] (an ident, not an
-   application -- the map is observed at its first manipulation), access
-   through functor parameters and first-class modules, and functions
-   rebound outside the module ([let add = M.add]). *)
+(* is the application [exp] (function part [func]) a DS event, and if so
+   where is its traversal root? deliberate misses: [M.empty] (not an
+   application; observed at first manipulation), functor-param /
+   first-class-module access, rebound functions ([let add = M.add]). *)
 let classify (exp : Typedtree.expression)
       (func : Typedtree.expression) : root option =
   match func.exp_desc with
@@ -276,7 +249,7 @@ let classify (exp : Typedtree.expression)
     end
   | _ -> None
 
-(* This is our special mapper that changes pexp_applies where an event occurs*)
+(* the mapper that rewrites each [Texp_apply] where an event occurs *)
 let inject_mapper (wire_emit : Typedtree.primitive_description) =
   let super = Tast_mapper.default in
 
@@ -312,7 +285,7 @@ let inject_mapper (wire_emit : Typedtree.primitive_description) =
     Tast_mapper.expr = inject_expression
   }
 
-(* exposed for compile_commmon *)
+(* exposed for compile_common *)
 let inject_instrumentation ~inject (tast : Typedtree.implementation) =
   if not inject then tast
   else
