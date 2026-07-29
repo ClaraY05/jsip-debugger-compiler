@@ -11,6 +11,4 @@ module Wire : sig
   val format_function_call :  Typedtree.expression -> Typedtree.expression -> (Asttypes.arg_label * Typedtree.expression) list -> t
 end
 
-val suppported_ds : string list
-
 val inject_instrumentation : inject : Bool.t -> Typedtree.implementation  -> Typedtree.implementation 
