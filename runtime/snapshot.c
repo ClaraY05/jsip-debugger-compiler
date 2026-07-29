@@ -2,25 +2,18 @@
 #include "caml/memory.h"
 #include "caml/mlvalues.h"
 
-/* takes in a ptr to a c string and writes it to stdout verbatim
+/* takes in a ptr to a c string and writes it out to stdout verbatim
 
-   Verbatim matters: no "[wire] " prefix and no added newline. Framing is the
-   caller's job (see [frame_open] / [frame_close] in
-   typing/vreplay_instrumentation.ml), because the reader expects a record's
-   frame markers to sit on the same line as the record itself, and the record
-   terminates itself.
+   No prefix, no newline -- framing is the caller's job, and it needs a
+   record's {} markers on the same line as the record. Flushed every call so
+   the dump stays in order.
 
-   The write is flushed immediately, and that is what makes ordering well
-   defined. Anything reaching the dump through OCaml's own buffered stdout
-   channel instead would only appear when that channel is flushed -- for a
-   program that never flushes, at exit, long after every record written here.
-
-   Caveat: this takes a NUL-terminated string, so a record containing an
-   embedded NUL would be truncated. Not reachable today (records are printed
-   source text), but it needs a length parameter if that ever changes. */
+   Keep msg in an argument position, never the format position: records will
+   eventually be printed source text, which can contain '%'. Note this also
+   stops at the first NUL, so a record must not contain one. */
 static void my_existing_function(const char *msg)
 {
-    fputs(msg, stdout);
+    fprintf(stdout, "%s", msg);
     fflush(stdout);
 }
 
