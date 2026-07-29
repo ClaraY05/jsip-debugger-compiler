@@ -283,10 +283,13 @@ marked `prunable` (a registration whose directory was moved or deleted).
 
 ## Repo hygiene — why `git status` and `git diff` look insane
 
-- **`_install/` is tracked: 228 files, ~60,000 lines — about 97% of this fork's entire
-  diff against upstream.** It is `make install` output committed by accident in
-  `610a1c933`; `.gitignore` covers `_build` but not `_install`. Never trust a raw
-  `git diff --stat` against trunk without excluding it.
+- **`_install/` is `make install` output and is no longer tracked.** It was committed by
+  accident in `610a1c933` — 228 files, ~364,000 lines, about 97% of this fork's entire
+  diff against upstream — and has since been untracked and gitignored. **The directory
+  must still exist on disk**: `./ocamlc -config` reports `_install/lib/ocaml` as its
+  `standard_library`. If it goes missing, recreate it with `make install`; never check it
+  back in. Note it remains in git *history*, so `git log`/`git clone` size still reflect
+  it, and a raw `git diff` against a pre-cleanup commit will still show all 228 files.
 - `lambda/matching.cmt4e44c0.tmp` — 0-byte compiler temp file, committed by accident.
 - **`runtime/caml/mlvalues.h`'s 507-line diff is a pure no-op reformat** (brace style +
   macro line rejoining). No token changed. Not project work.
@@ -298,7 +301,8 @@ marked `prunable` (a registration whose directory was moved or deleted).
 - `.tmp_files/` is the authors' gitignored scratch area — `tmp.ml` is the working test
   input, `*_dump.txt` are captured program stdout.
 
-None of the above has been cleaned up, by decision. Just don't mistake it for signal.
+Apart from `_install/`, none of the above has been cleaned up. Just don't mistake it for
+signal.
 
 ---
 
