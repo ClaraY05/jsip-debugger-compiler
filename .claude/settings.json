@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git worktree list)",
+      "Bash(git ls-files:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(file:*)",
+      "Bash(wc:*)",
+      "Bash(strings:*)",
+      "Bash(nm:*)",
+      "Bash(nproc)",
+      "Bash(./ocamlc -config)",
+      "Bash(./ocamlc -version)",
+      "Bash(./ocamlc -help)",
+      "Bash(make -n:*)",
+      "Bash(./tools/check-typo-since:*)",
+      "Bash(./tools/check-typo:*)",
+      "Read",
+      "Grep",
+      "Glob"
+    ]
+  }
+}
