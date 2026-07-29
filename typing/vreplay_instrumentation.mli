@@ -1,4 +1,3 @@
-
 module Wire : sig
   type t = {
       location: string
@@ -8,7 +7,14 @@ module Wire : sig
   }
   [@@deriving sexp]
 
-  val format_function_call :  Typedtree.expression -> Typedtree.expression -> (Asttypes.arg_label * Typedtree.expression) list -> t
+  (* the argument list is the one [Texp_apply] carries, so its second
+     component is an [apply_arg] rather than a plain expression *)
+  val format_function_call :
+    Typedtree.expression
+    -> Typedtree.expression
+    -> (Asttypes.arg_label * Typedtree.apply_arg) list
+    -> t
 end
 
-val inject_instrumentation : inject : Bool.t -> Typedtree.implementation  -> Typedtree.implementation 
+val inject_instrumentation :
+  inject:bool -> Typedtree.implementation -> Typedtree.implementation
