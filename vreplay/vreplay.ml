@@ -74,32 +74,64 @@ let live_known () =
   known := !kept;
   Array.of_list !pairs
 
-(* ---- serialization (hand-rolled: no Core/sexplib dependency) ---- *)
+(* ---- serialization: a flat list of nodes (adjacency list) ----
+   The C walker returns a flat [cell array]; index [i] IS node [i]'s id.  We
+   emit one record per node -- (id, address, tag, size, value, children) --
+   where [value] holds the node's non-pointer data fields (labeled) and
+   [children] is the list of ids of the nodes its structural-pointer ([Cell])
+   fields point at.  Children are referenced BY ID, never nested, so a node
+   can have any number of them and shared / cyclic structure is represented
+   exactly once with no recursion.  Hand-rolled (no Core/sexplib dependency).
+
+   e.g. root A with children B, C, and C with child D  ->
+     (node (id 0) ... (children (1 2)))   (* A *)
+     (node (id 1) ... (children ()))      (* B *)
+     (node (id 2) ... (children (3)))     (* C *)
+     (node (id 3) ... (children ()))      (* D *) *)
 
 let label_at labels i =
   match List.nth_opt labels i with Some l -> l | None -> string_of_int i
 
-let add_field buf lbl = function
-  | Cell i -> Printf.bprintf buf "(%s (cell %d))" lbl i
+(* a non-structural field -> node data ("value"); a [Cell] is a child and is
+   listed by id in [children] instead. *)
+let render_data buf lbl = function
   | Edge id -> Printf.bprintf buf "(%s (edge %d))" lbl id
   | Ptr p -> Printf.bprintf buf "(%s (ptr 0x%nx))" lbl p
   | Leaf s -> Printf.bprintf buf "(%s (leaf %S))" lbl s
+  | Cell _ -> ()
 
 let emit_event ~loc ~fn ~ds ~id ~labels ~cells =
   let buf = Buffer.create 256 in
-  Printf.bprintf buf "(event (id %d) (loc %S) (fn %S) (ds %S) (cells (" id loc fn ds;
+  Printf.bprintf buf "(event (id %d) (loc %S) (fn %S) (ds %S) (nodes (" id loc fn ds;
   Array.iteri
-    (fun ci c ->
-      Printf.bprintf buf " (cell %d (addr 0x%nx) (tag %d) (size %d) (fields ("
-        ci c.addr c.tag c.size;
+    (fun node_id c ->
+      Printf.bprintf buf " (node (id %d) (addr 0x%nx) (tag %d) (size %d) (value ("
+        node_id c.addr c.tag c.size;
+      (* value: the node's non-pointer data fields, labeled *)
+      let sep = ref false in
       Array.iteri
         (fun fi fld ->
-          if fi > 0 then Buffer.add_char buf ' ';
-          add_field buf (label_at labels fi) fld)
+          match fld with
+          | Cell _ -> ()
+          | _ ->
+            if !sep then Buffer.add_char buf ' ';
+            sep := true;
+            render_data buf (label_at labels fi) fld)
+        c.fields;
+      Buffer.add_string buf ")) (children (";
+      (* children: ids of the nodes this node's [Cell] fields point at *)
+      let sep = ref false in
+      Array.iter
+        (function
+          | Cell child ->
+            if !sep then Buffer.add_char buf ' ';
+            sep := true;
+            Printf.bprintf buf "%d" child
+          | _ -> ())
         c.fields;
       Buffer.add_string buf ")))")
     cells;
-  Buffer.add_string buf ")))\n";
+  Buffer.add_string buf "))\n";
   print_string (Buffer.contents buf);
   flush stdout
 
