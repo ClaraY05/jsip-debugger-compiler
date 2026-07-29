@@ -337,3 +337,8 @@ META
 /.worktrees
 
 /.tmp_files
+
+# Claude Code's EnterWorktree tool creates worktrees here. Keep them, and any
+# other local Claude state, out of the repo -- but do track the config files
+# (settings.json, commands/, agents/) that the team shares.
+/.claude/worktrees
