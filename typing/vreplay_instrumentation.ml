@@ -7,6 +7,20 @@ module Wire = struct
   }
   [@@deriving sexp]
 
+(* the [external] we splice into each instrumented structure *)
+let wire_external =
+  let ty_constr name =
+    Ast_helper.Typ.constr (Location.mknoloc (Longident.Lident name)) []
+  in
+  let emit_type =
+    Ast_helper.Typ.arrow Nolabel (ty_constr "string") (ty_constr "unit")
+  in
+  Ast_helper.Str.primitive
+    (Ast_helper.Prim.mk_decl
+       ~prim:[ "caml_wire_emit" ]
+       (Location.mknoloc "__wire_emit")
+       emit_type)
+
   let format_function_call (exp : Typedtree.expression) (func:Typedtree.expression) args = 
     let location = Format.asprintf "%a" Location.print_loc exp.exp_loc in
     let function_type, function_data = match func.exp_desc with
@@ -35,6 +49,16 @@ end
 
 (* This will hopefully be our external C function *)
 let snapshot _x _y _z = _x
+
+(* call a c function *)
+let call_c_node input =
+ let callc_function =
+   Ast_helper.Exp.ident (Location.mknoloc (Longident.Lident "__wire_emit")) in
+ let callc_arg = Ast_helper.Exp.constant {
+   pconst_desc = (Pconst_string (input, Location.none, None));
+   pconst_loc = Location.none} in
+ Ast_helper.Exp.apply callc_function [ (Nolabel, callc_arg) ]
+;;
 
 (* makes an expression by passing down parent fields for all but env, desc, and type *)
 let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc : Typedtree.expression = 
@@ -104,7 +128,7 @@ let f_then_run_node (exp : Typedtree.expression) ~f ~run:((func : Typedtree.expr
       ; pat_env = exp.exp_env
       ; pat_attributes=exp.exp_attributes
       }
-  ; vb_expr= f exp func args
+  ; vb_expr= f "meow"
   ; vb_rec_kind = Value_rec_types.Dynamic
   ; vb_attributes=exp.exp_attributes
   ; vb_loc=exp.exp_loc
@@ -163,7 +187,7 @@ let inject_mapper =
     let recurse_down : Typedtree.expression = super.expr self exp in 
     match exp.exp_desc with 
     | Texp_apply (func, args) -> if filter_func func then 
-      ({  exp_desc = f_then_run_node exp ~f:snapshot ~run:(func, args)
+      ({  exp_desc = f_then_run_node exp ~f:(call_c_node) ~run:(func, args)
         ; exp_loc = exp.exp_loc
         ; exp_extra = exp.exp_extra
         ; exp_type = exp.exp_type
