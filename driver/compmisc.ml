@@ -42,6 +42,10 @@ let init_path ?(standard_library=Config.standard_library)
        (* Config.flexdll_dirs is either [] or ["+flexdll"]: don't include a
           reference to the Standard Library when -nostdlib was specified. *)
        (if !Clflags.no_std_include then [] else Config.flexdll_dirs);
+       (* -visual-replay: make the [Vreplay] runtime library discoverable so
+          the injected [Vreplay.snapshot] call type-checks and [vreplay.cma]
+          resolves at link time. "+vreplay" expands to <stdlib>/vreplay. *)
+       (if !Clflags.visual_replay then ["+vreplay"] else []);
        !Compenv.first_include_dirs]
   in
   let visible =

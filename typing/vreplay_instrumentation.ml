@@ -77,10 +77,6 @@ let call_c_node input =
 let frame_open = "{"
 let frame_close = "}"
 
-(* stand-in until we can serialize a real record. note the trailing newline --
-   whatever replaces this has to terminate its own record *)
-let placeholder_record = "meow\n"
-
 (* makes an expression by passing down parent fields for all but env, desc,
    and type *)
 let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
@@ -92,17 +88,65 @@ let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
   ; exp_env
   ; exp_attributes=parent.exp_attributes}
 
-(* wrapper to run [exp] after doing some instrumentation [inject] along with
-   enclosing frame markers. exp should be a Texp_apply to type check. *)
-(* This returns an exp_desc, not an actual exp. *)
-(* [inject] is any already-typed expression -- we deliberately don't care what
-   it does or what type it has, since the real instrumentation will be a lot
-   more than one emit. it writes the record and terminates it; we own only the
-   markers either side. [emit] is passed in because only the caller's env has
-   [wire_emit_name] in scope. *)
+(* the module a qualified application comes from: [Map.add] -> "Map",
+   [Stdlib.Map.add] -> "Map". Used as the [~ds] key into [Vreplay.ds_info]. *)
+let ds_module (func : Typedtree.expression) : string option =
+  (* [Longident.t] here is [Lident of string | Ldot of t loc * string loc
+     | Lapply of t loc * t loc], so the located components need [.txt]. *)
+  let last_mod = function
+    | Longident.Lident m -> Some m
+    | Longident.Ldot (_, m) -> Some m.txt
+    | Longident.Lapply (_, _) -> None
+  in
+  match func.exp_desc with
+  | Texp_ident (_, lid, _) ->
+    (match lid.txt with
+     | Longident.Ldot (path, _fn) -> last_mod path.txt
+     | _ -> None)
+  | _ -> None
+
+(* Build and type-check [Vreplay.snapshot ~loc ~fn ~ds res] in [env]. [env]
+   must have [res] bound (we run this in [env_with_res]); [Vreplay] is resolved
+   by ordinary name resolution against the instrumented unit's load path, the
+   same way the emit path resolves [__wire_emit]. *)
+let snapshot_call_node env ~loc ~fn ~ds =
+  let str s =
+    Ast_helper.Exp.constant
+      { pconst_desc = Pconst_string (s, Location.none, None)
+      ; pconst_loc = Location.none }
+  in
+  let snapshot_fn =
+    Ast_helper.Exp.ident
+      (Location.mknoloc
+         (Longident.Ldot
+            ( Location.mknoloc (Longident.Lident "Vreplay")
+            , Location.mknoloc "snapshot" )))
+  in
+  let res_arg =
+    Ast_helper.Exp.ident (Location.mknoloc (Longident.Lident "res"))
+  in
+  Typecore.type_expression env
+    (Ast_helper.Exp.apply snapshot_fn
+       [ (Asttypes.Labelled "loc", str loc)
+       ; (Asttypes.Labelled "fn",  str fn)
+       ; (Asttypes.Labelled "ds",  str ds)
+       ; (Asttypes.Nolabel, res_arg) ])
+
+(* Wrap [exp] as:
+
+     let () = emit "{"            (* opening frame marker *)
+     in let res = exp             (* evaluate the call, bind its result *)
+     in let () = snapshot res     (* observe the RESULT's side effects *)
+     in let () = emit "}"         (* closing frame marker *)
+     in res                       (* hand the result back unchanged *)
+
+   Returns an [exp_desc], not an [expression]. The snapshot runs AFTER [res] is
+   bound so it sees the value the call produced. [emit] is passed in because
+   only the caller's env has [wire_emit_name] in scope; [snapshot] is passed
+   [env_with_res] because it references [res]. *)
 let inject_then_run_node (exp : Typedtree.expression)
       ~(emit : Env.t -> string -> Typedtree.expression)
-      ~(inject : Typedtree.expression) =
+      ~(snapshot : Env.t -> Typedtree.expression) =
   let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ())
   in
   let res_ident = Ident.create_local "res"
@@ -115,6 +159,7 @@ let inject_then_run_node (exp : Typedtree.expression)
     ; val_uid=res_uid}
   in
   let env_with_res = Env.add_value res_ident res_val_desc exp.exp_env in
+  let snapshot_exp = snapshot env_with_res in
   (* First emit the opening frame marker *)
   Typedtree.Texp_let (Asttypes.Nonrecursive,
   [{
@@ -131,28 +176,9 @@ let inject_then_run_node (exp : Typedtree.expression)
   ; vb_attributes=exp.exp_attributes
   ; vb_loc=exp.exp_loc
   }], mk_exp exp exp.exp_env exp.exp_type
-  (* Then, run our instrumentation. pat_type comes from [inject] rather than
-     [Predef.type_unit] so it isn't forced to be unit -- the value is dropped
-     either way, since [Matching.for_let] turns a [Tpat_any] binding into an
-     [Lsequence] without ever reading pat_type. *)
+  (* Evaluate the function and bind to res FIRST, so the snapshot can observe
+     the value it produced. *)
   (Typedtree.Texp_let (Asttypes.Nonrecursive,
-  [{
-    vb_pat=
-      { pat_desc=Tpat_any
-      ; pat_loc=exp.exp_loc
-      ; pat_extra = []
-      ; pat_type = inject.exp_type
-      ; pat_env = exp.exp_env
-      ; pat_attributes=exp.exp_attributes
-      }
-  ; vb_expr= inject
-  ; vb_rec_kind = Value_rec_types.Dynamic
-  ; vb_attributes=exp.exp_attributes
-  ; vb_loc=exp.exp_loc
-  }]
-   (* Then evaluate the function and bind to res *)
-  , mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
-  (Asttypes.Nonrecursive,
   [{
     vb_pat=
     (* for me: Ident.t * string loc * Uid.t *)
@@ -164,6 +190,26 @@ let inject_then_run_node (exp : Typedtree.expression)
       ; pat_attributes=exp.exp_attributes
       }
   ; vb_expr= exp
+  ; vb_rec_kind = Value_rec_types.Dynamic
+  ; vb_attributes=exp.exp_attributes
+  ; vb_loc=exp.exp_loc
+  }]
+   (* Then run the snapshot on [res]. pat_type comes from [snapshot_exp] rather
+      than [Predef.type_unit] so it isn't forced to be unit -- the value is
+      dropped either way, since [Matching.for_let] turns a [Tpat_any] binding
+      into an [Lsequence] without ever reading pat_type. *)
+  , mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
+  (Asttypes.Nonrecursive,
+  [{
+    vb_pat=
+      { pat_desc=Tpat_any
+      ; pat_loc=exp.exp_loc
+      ; pat_extra = []
+      ; pat_type = snapshot_exp.exp_type
+      ; pat_env = env_with_res
+      ; pat_attributes=exp.exp_attributes
+      }
+  ; vb_expr= snapshot_exp
   ; vb_rec_kind = Value_rec_types.Dynamic
   ; vb_attributes=exp.exp_attributes
   ; vb_loc=exp.exp_loc
@@ -216,10 +262,14 @@ let inject_mapper (wire_emit : Typedtree.primitive_description) =
   let inject_expression self (exp : Typedtree.expression) =
     let recurse_down : Typedtree.expression = super.expr self exp in
     match exp.exp_desc with
-    | Texp_apply (func, _) -> if filter_func func then
+    | Texp_apply (func, args) -> if filter_func func then
+      let wire = Wire.format_function_call exp func args in
+      let ds = match ds_module func with Some m -> m | None -> "" in
       ({  exp_desc =
             inject_then_run_node recurse_down ~emit:emit_node
-              ~inject:(emit_node exp.exp_env placeholder_record)
+              ~snapshot:(fun env ->
+                snapshot_call_node env
+                  ~loc:wire.Wire.location ~fn:wire.Wire.function_data ~ds)
         ; exp_loc = exp.exp_loc
         ; exp_extra = exp.exp_extra
         ; exp_type = exp.exp_type

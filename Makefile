@@ -850,12 +850,29 @@ endif
 .PHONY: all
 all: coreall
 	$(MAKE) ocaml
+	$(MAKE) vreplay
 	$(MAKE) otherlibraries $(WITH_DEBUGGER) $(OCAMLDOC_TARGET) \
          $(OCAMLTEST_TARGET)
 	$(MAKE) othertools
 ifeq "$(build_libraries_manpages)" "true"
 	$(MAKE) manpages
 endif
+
+# Visual-replay runtime library.  A separate, pure-stdlib library (see
+# vreplay/vreplay.ml) that the driver links into a program ONLY under
+# -visual-replay (see bytecomp/bytelink.ml) and finds via "+vreplay" on the
+# load path (see driver/compmisc.ml).  Built with the freshly-built ./ocamlc
+# (run through the just-built runtime, since ./ocamlc's shebang points at the
+# not-yet-installed ocamlrun) against the in-tree stdlib.
+VREPLAY_OCAMLC = $(NEW_OCAMLRUN) ./ocamlc -nostdlib -I stdlib -I vreplay
+.PHONY: vreplay
+vreplay: vreplay/vreplay.cma
+vreplay/vreplay.cmi: vreplay/vreplay.mli ocamlc stdlib/stdlib.cma
+	$(VREPLAY_OCAMLC) -c $<
+vreplay/vreplay.cmo: vreplay/vreplay.ml vreplay/vreplay.cmi ocamlc
+	$(VREPLAY_OCAMLC) -c vreplay/vreplay.ml
+vreplay/vreplay.cma: vreplay/vreplay.cmo ocamlc
+	$(VREPLAY_OCAMLC) -a -o $@ vreplay/vreplay.cmo
 
 # Bootstrap and rebuild the whole system.
 # The compilation of ocaml will fail if the runtime has changed.
