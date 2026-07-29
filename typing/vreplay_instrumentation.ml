@@ -91,8 +91,8 @@ let placeholder_record = "meow\n"
    will run, once that C entry point exists. same newline rule. *)
 let root_placeholder = "ROOT\n"
 
-(* makes an expression by passing down parent fields for all but env, desc,
-   and type *)
+(* a synthesized expression: parent supplies only the loc. attributes stay
+   empty so a user attribute is not replicated onto instrumentation nodes *)
 let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
   : Typedtree.expression =
   { exp_desc
@@ -100,7 +100,7 @@ let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
   ; exp_extra=[]
   ; exp_type
   ; exp_env
-  ; exp_attributes=parent.exp_attributes}
+  ; exp_attributes=[]}
 
 (* wrapper to run [exp] after doing some instrumentation [inject] along with
    enclosing frame markers. exp should be a Texp_apply to type check. *)
@@ -123,7 +123,7 @@ let inject_then_run_node ?inject_after (exp : Typedtree.expression)
     { val_type=exp.exp_type
     ; val_kind=Types.Val_reg
     ; val_loc= exp.exp_loc
-    ; val_attributes=exp.exp_attributes
+    ; val_attributes=[]
     ; val_uid=res_uid}
   in
   let env_with_res = Env.add_value res_ident res_val_desc exp.exp_env in
@@ -141,11 +141,11 @@ let inject_then_run_node ?inject_after (exp : Typedtree.expression)
            ; pat_extra = []
            ; pat_type = rhs.exp_type
            ; pat_env = env
-           ; pat_attributes=exp.exp_attributes
+           ; pat_attributes=[]
            }
        ; vb_expr= rhs
        ; vb_rec_kind = Value_rec_types.Dynamic
-       ; vb_attributes=exp.exp_attributes
+       ; vb_attributes=[]
        ; vb_loc=exp.exp_loc
        }], body))
   in
@@ -179,11 +179,11 @@ let inject_then_run_node ?inject_after (exp : Typedtree.expression)
            ; pat_extra = []
            ; pat_type = exp.exp_type
            ; pat_env = env_with_res
-           ; pat_attributes=exp.exp_attributes
+           ; pat_attributes=[]
            }
        ; vb_expr= exp
        ; vb_rec_kind = Value_rec_types.Dynamic
-       ; vb_attributes=exp.exp_attributes
+       ; vb_attributes=[]
        ; vb_loc=exp.exp_loc
        }], after_close_then_return))
   in
