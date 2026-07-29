@@ -304,12 +304,14 @@ whitespace), `vreplay/vreplay.mli`, `test_programs/map_test.ml`.
 `driver/main_args.ml:698-700` has a literal newline inside the doc string, so
 `ocamlc -help` prints it across two lines with stray indentation.
 
-### 16. Synthesized nodes inherit the parent's attributes — **open**
+### 16. Synthesized nodes inherit the parent's attributes — **fixed**
 
-`mk_exp` copies the parent's `exp_attributes` onto every node it builds, and
-each synthesized `vb_pat` / `vb_attributes` does the same. A user attribute
-such as `[@inline]` is therefore replicated onto roughly five synthetic nodes
-per instrumented call. Synthesized nodes should carry `[]`.
+`mk_exp` copied the parent's `exp_attributes` onto every node it built, and
+each synthesized `vb_pat` / `vb_attributes` did the same, so a user attribute
+such as `[@inline]` was replicated onto roughly five synthetic nodes per
+instrumented call. All synthesized nodes (including the result binder's
+`val_attributes`) now carry `[]`; only the replacement node for the original
+application keeps the user's attributes.
 
 ### 17. `-visual-replay` is a silent no-op in the toplevel — **open**
 
