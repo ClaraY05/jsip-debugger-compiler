@@ -40,9 +40,10 @@ git log 511483454..HEAD --oneline -- <path>
 When reporting "what changed", you must filter out known noise, or your answer will be
 wrong by two orders of magnitude:
 
-- **`_install/`** — 228 files, ~364,000 lines of accidentally-committed `make install`
-  output. Untracked and gitignored now, but still present in history, so it dominates any
-  diff spanning the cleanup commit. Always exclude it.
+- **`_install/`** — 228 files (~61,000 lines of text plus 8 binaries, 43 MB) of
+  accidentally-committed `make install` output. Untracked and gitignored now, but still
+  present in history, so it dominates any diff spanning the cleanup commit. Always
+  exclude it.
 - **`runtime/caml/mlvalues.h`** — its 507-line diff is a pure no-op reformat.
 - **`parsing/parsetree.mli`** — 1 line, a corrupted license header, not a real change.
 - **`parsing/ast_helper.ml`** — 3 lines of trailing whitespace.

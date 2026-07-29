@@ -284,8 +284,9 @@ marked `prunable` (a registration whose directory was moved or deleted).
 ## Repo hygiene — why `git status` and `git diff` look insane
 
 - **`_install/` is `make install` output and is no longer tracked.** It was committed by
-  accident in `610a1c933` — 228 files, ~364,000 lines, about 97% of this fork's entire
-  diff against upstream — and has since been untracked and gitignored. **The directory
+  accident in `610a1c933` — 228 files (220 text totalling ~61,000 lines, plus 8 binaries;
+  43 MB), about 97% of this fork's entire diff against upstream — and has since been
+  untracked and gitignored. **The directory
   must still exist on disk**: `./ocamlc -config` reports `_install/lib/ocaml` as its
   `standard_library`. If it goes missing, recreate it with `make install`; never check it
   back in. Note it remains in git *history*, so `git log`/`git clone` size still reflect
