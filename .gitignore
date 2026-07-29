@@ -339,3 +339,10 @@ META
 # other local Claude state, out of the repo -- but do track the config files
 # (settings.json, commands/, agents/) that the team shares.
 /.claude/worktrees
+
+# `make install` output. configure was run with --prefix=$PWD/_install, so this
+# is generated build output, not source. It was tracked by accident (228 files,
+# ~364k lines) until it was untracked; keep it ignored. The directory must still
+# EXIST on disk -- ./ocamlc reports _install/lib/ocaml as its standard_library --
+# so recreate it with `make install`, never by checking it back in.
+/_install
