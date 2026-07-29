@@ -53,7 +53,14 @@ Fixed by giving the dump a single write path:
 
 - `typing/vreplay_instrumentation.ml` no longer uses `Printf.printf` at all.
   `print_string_node` is gone; `inject_then_run_node` takes an `~emit`
-  callback and pushes the markers through `caml_wire_emit` like the payload.
+  callback and pushes the markers through `caml_wire_emit` like the record.
+
+  `~inject` stays what it always was — an **arbitrary already-typed unit
+  expression** — and `inject_then_run_node` knows nothing about what it does.
+  The real instrumentation will be much more than a single `caml_wire_emit`
+  call (traversing argument values, allocating, several writes), so nothing in
+  that function assumes a string payload. It owns the `{}` markers and nothing
+  else; terminating a record with a newline belongs to `~inject`.
 - `runtime/snapshot.c` now writes its argument **verbatim** — no `[wire] `
   prefix, no injected newline — and the OCaml side owns all framing. It also
   uses `caml_string_length` rather than relying on NUL termination.

@@ -73,16 +73,26 @@ let call_c_node input =
 
 (* Frame markers. The reader reconstructs call nesting from the running sum of
    these ([frame_open] is +1, [frame_close] is -1) and expects them to prefix
-   the payload line they belong to, so they have to reach the dump in the same
-   order the calls happened.
+   the record they belong to, so they have to reach the dump in the same order
+   the calls happened.
 
-   That is why they go through [caml_wire_emit] like the payload does rather
+   That is why they go through [caml_wire_emit] like the record does rather
    than through [Printf.printf]: [Printf.printf] writes into OCaml's stdout
    channel buffer, which is only flushed when the program exits, while
    [caml_wire_emit] writes to the C [stdout] and flushes on every call. Mixing
-   the two meant every marker in the run arrived after every payload. *)
+   the two meant every marker in the run arrived after every record.
+
+   These are the only bytes this module puts on the wire itself. Terminating
+   the record is the injected instrumentation's job, not ours -- see
+   [inject_then_run_node]. *)
 let frame_open = "{"
 let frame_close = "}"
+
+(* Stand-in for the real record until the serialization problem is solved (see
+   [Wire.format_function_call], which cannot be used yet because there is no
+   sexp printer). Note the trailing newline: whatever replaces this has to
+   terminate its own record. *)
+let placeholder_record = "meow\n"
 
 (* makes an expression by passing down parent fields for all but env, desc,
    and type *)
@@ -95,14 +105,25 @@ let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
   ; exp_env
   ; exp_attributes=parent.exp_attributes}
 
-(* wrapper to run [exp] after emitting [payload], enclosed in frame markers.
-   exp should be a Texp_apply to type check. *)
+(* wrapper to run [exp] after doing some instrumentation [inject] (which should
+   be unit) along with enclosing frame markers. exp should be a Texp_apply to
+   type check. *)
 (* This returns an exp_desc, not an actual exp. *)
-(* [emit] builds an already-typed unit expression that pushes its argument
-   through [caml_wire_emit]. It has to be passed in because only the caller
-   has an environment carrying the spliced-in [wire_emit_name] primitive. *)
+(* [inject] is an arbitrary already-typed unit expression, and this function
+   deliberately knows nothing about what it does. Today it happens to be a
+   single [caml_wire_emit] call, but it is meant to grow into whatever walking
+   and dumping a data structure takes -- several calls, allocation, traversal
+   of the argument values -- so nothing here should assume it is one string.
+   Emitting the record and terminating it (with a newline, so the frame markers
+   of the next record start a fresh line) is [inject]'s job; this function owns
+   only the markers on either side.
+
+   [emit] builds an already-typed unit expression that pushes its argument
+   through [caml_wire_emit]. It has to be passed in because only the caller has
+   an environment carrying the spliced-in [wire_emit_name] primitive. *)
 let inject_then_run_node (exp : Typedtree.expression)
-      ~(emit : Env.t -> string -> Typedtree.expression) ~(payload : string) =
+      ~(emit : Env.t -> string -> Typedtree.expression)
+      ~(inject : Typedtree.expression) =
   let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ())
   in
   let res_ident = Ident.create_local "res"
@@ -131,9 +152,9 @@ let inject_then_run_node (exp : Typedtree.expression)
   ; vb_attributes=exp.exp_attributes
   ; vb_loc=exp.exp_loc
   }], mk_exp exp exp.exp_env exp.exp_type
-  (* Then, run our instrumentation. The payload ends the line; the markers
-     emitted before it are what the reader turns into this line's depth
-     delta. *)
+  (* Then, run our instrumentation. Whatever it writes is this record; the
+     markers emitted before it are what the reader turns into the record's
+     depth delta. *)
   (Typedtree.Texp_let (Asttypes.Nonrecursive,
   [{
     vb_pat=
@@ -144,7 +165,7 @@ let inject_then_run_node (exp : Typedtree.expression)
       ; pat_env = exp.exp_env
       ; pat_attributes=exp.exp_attributes
       }
-  ; vb_expr= emit exp.exp_env (payload ^ "\n")
+  ; vb_expr= inject
   ; vb_rec_kind = Value_rec_types.Dynamic
   ; vb_attributes=exp.exp_attributes
   ; vb_loc=exp.exp_loc
@@ -217,7 +238,8 @@ let inject_mapper (wire_emit : Typedtree.primitive_description) =
     match exp.exp_desc with
     | Texp_apply (func, _) -> if filter_func func then
       ({  exp_desc =
-            inject_then_run_node recurse_down ~emit:emit_node ~payload:"meow"
+            inject_then_run_node recurse_down ~emit:emit_node
+              ~inject:(emit_node exp.exp_env placeholder_record)
         ; exp_loc = exp.exp_loc
         ; exp_extra = exp.exp_extra
         ; exp_type = exp.exp_type

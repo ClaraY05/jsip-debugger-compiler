@@ -175,8 +175,14 @@ corrupts the user program's backtraces).
 does not have and cannot easily get** — the compiler bootstraps against its own stdlib,
 not opam. Without ppx the attribute is *silently ignored*: there is no `sexp_of_t`
 (zero occurrences in the `.cmi`). This is why `print_call_node` is commented out and why
-injection hardcodes `~payload:"meow"`. Solving it is the main blocker on the compiler
-side.
+injection hardcodes `placeholder_record = "meow\n"`. Solving it is the main blocker on
+the compiler side.
+
+Note `inject_then_run_node` takes `~inject` as an **arbitrary already-typed unit
+expression** and knows nothing about what it does — the real instrumentation will be a
+good deal more than one `caml_wire_emit` call (traversing argument values, allocating,
+several writes). Keep it that way; don't push string-payload assumptions back into it.
+It owns only the `{}` markers. Terminating a record with a newline is `~inject`'s job.
 
 **3. `filter_func` is a stub.** It returns `true` unconditionally, so *every* function
 application is instrumented, `+` and `^` included. The intended behavior is to fire only
