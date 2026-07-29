@@ -86,9 +86,10 @@ let print_string_node env input = Typecore.type_expression env (
   print_string_node exp.exp_env (Sexplib.Sexp.to_string_hum (Wire.sexp_of_t wire_data)) *)
 
 
-(* wrapper to run run after doing some instrumentation f (which should return unit) along with enclosing brackets. exp should be a Texp_apply to type check. *)
+(* wrapper to run run after doing some instrumentation f (which should be unit) along with enclosing brackets. exp should be a Texp_apply to type check. *)
 (* This returns an exp_desc, not an actual exp. *)
-let f_then_run_node (exp : Typedtree.expression) ~f ~run:((func : Typedtree.expression), args) = 
+(* f will be an ast node instead of tast for now *)
+let inject_then_run_node (exp : Typedtree.expression) ~inject ~run:((_func : Typedtree.expression), _args) = 
   let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ())
   in
   let res_ident = Ident.create_local "res" 
@@ -128,7 +129,7 @@ let f_then_run_node (exp : Typedtree.expression) ~f ~run:((func : Typedtree.expr
       ; pat_env = exp.exp_env
       ; pat_attributes=exp.exp_attributes
       }
-  ; vb_expr= f "meow"
+  ; vb_expr= (Typecore.type_expression exp.exp_env inject)
   ; vb_rec_kind = Value_rec_types.Dynamic
   ; vb_attributes=exp.exp_attributes
   ; vb_loc=exp.exp_loc
@@ -187,7 +188,7 @@ let inject_mapper =
     let recurse_down : Typedtree.expression = super.expr self exp in 
     match exp.exp_desc with 
     | Texp_apply (func, args) -> if filter_func func then 
-      ({  exp_desc = f_then_run_node exp ~f:(call_c_node) ~run:(func, args)
+      ({  exp_desc = inject_then_run_node exp ~inject:(call_c_node "meow") ~run:(func, args)
         ; exp_loc = exp.exp_loc
         ; exp_extra = exp.exp_extra
         ; exp_type = exp.exp_type
