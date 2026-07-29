@@ -7,20 +7,6 @@ module Wire = struct
   }
   [@@deriving sexp]
 
-(* the [external] we splice into each instrumented structure *)
-let wire_external =
-  let ty_constr name =
-    Ast_helper.Typ.constr (Location.mknoloc (Longident.Lident name)) []
-  in
-  let emit_type =
-    Ast_helper.Typ.arrow Nolabel (ty_constr "string") (ty_constr "unit")
-  in
-  Ast_helper.Str.primitive
-    (Ast_helper.Prim.mk_decl
-       ~prim:[ "caml_wire_emit" ]
-       (Location.mknoloc "__wire_emit")
-       emit_type)
-
   let format_function_call (exp : Typedtree.expression) (func:Typedtree.expression) args = 
     let location = Format.asprintf "%a" Location.print_loc exp.exp_loc in
     let function_type, function_data = match func.exp_desc with
@@ -47,13 +33,26 @@ let wire_external =
   ;;
 end
 
-(* This will hopefully be our external C function *)
-let snapshot _x _y _z = _x
+(* the [external] we splice into each instrumented structure. [call_c_node]
+   refers to it by this name, so the declaration and the call sites must agree. *)
+let wire_emit_name = "__wire_emit"
+
+let wire_external =
+  let ty_constr name =
+    Ast_helper.Typ.constr (Location.mknoloc (Longident.Lident name)) []
+  in
+  let emit_type =
+    Ast_helper.Typ.arrow Nolabel (ty_constr "string") (ty_constr "unit")
+  in
+  Ast_helper.Prim.mk_decl
+    ~prim:[ "caml_wire_emit" ]
+    (Location.mknoloc wire_emit_name)
+    emit_type
 
 (* call a c function *)
 let call_c_node input =
  let callc_function =
-   Ast_helper.Exp.ident (Location.mknoloc (Longident.Lident "__wire_emit")) in
+   Ast_helper.Exp.ident (Location.mknoloc (Longident.Lident wire_emit_name)) in
  let callc_arg = Ast_helper.Exp.constant {
    pconst_desc = (Pconst_string (input, Location.none, None));
    pconst_loc = Location.none} in
@@ -86,10 +85,11 @@ let print_string_node env input = Typecore.type_expression env (
   print_string_node exp.exp_env (Sexplib.Sexp.to_string_hum (Wire.sexp_of_t wire_data)) *)
 
 
-(* wrapper to run run after doing some instrumentation f (which should be unit) along with enclosing brackets. exp should be a Texp_apply to type check. *)
+(* wrapper to run [exp] after doing some instrumentation [inject] (which should be unit) along with enclosing brackets. exp should be a Texp_apply to type check. *)
 (* This returns an exp_desc, not an actual exp. *)
-(* f will be an ast node instead of tast for now *)
-let inject_then_run_node (exp : Typedtree.expression) ~inject ~run:((_func : Typedtree.expression), _args) = 
+(* [inject] is already typed by the caller, which is the only place that has an
+   environment carrying the spliced-in [wire_emit_name] primitive. *)
+let inject_then_run_node (exp : Typedtree.expression) ~(inject : Typedtree.expression) =
   let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ())
   in
   let res_ident = Ident.create_local "res" 
@@ -129,7 +129,7 @@ let inject_then_run_node (exp : Typedtree.expression) ~inject ~run:((_func : Typ
       ; pat_env = exp.exp_env
       ; pat_attributes=exp.exp_attributes
       }
-  ; vb_expr= (Typecore.type_expression exp.exp_env inject)
+  ; vb_expr= inject
   ; vb_rec_kind = Value_rec_types.Dynamic
   ; vb_attributes=exp.exp_attributes
   ; vb_loc=exp.exp_loc
@@ -180,15 +180,25 @@ let inject_then_run_node (exp : Typedtree.expression) ~inject ~run:((_func : Typ
 let filter_func (_func : Typedtree.expression) = true
 
 (* This is our special mapper that changes pexp_applies where an event occurs*)
-let inject_mapper = 
-  let super = Tast_mapper.default in 
+let inject_mapper (wire_emit : Typedtree.primitive_description) =
+  let super = Tast_mapper.default in
+
+  (* [call_c_node] refers to [wire_emit_name], which is only in scope because
+     [inject_instrumentation] splices the declaration into the structure. The
+     environments hanging off the typedtree were snapshotted by [Typemod] before
+     that happened, so the binding has to be added back before typing the call. *)
+  let emit_node env payload =
+    Typecore.type_expression
+      (Env.add_value wire_emit.prim_id wire_emit.prim_val env)
+      (call_c_node payload)
+  in
 
   (* this function injects our custom instrumentation at every event *)
-  let inject_expression self (exp : Typedtree.expression) = 
-    let recurse_down : Typedtree.expression = super.expr self exp in 
-    match exp.exp_desc with 
-    | Texp_apply (func, args) -> if filter_func func then 
-      ({  exp_desc = inject_then_run_node exp ~inject:(call_c_node "meow") ~run:(func, args)
+  let inject_expression self (exp : Typedtree.expression) =
+    let recurse_down : Typedtree.expression = super.expr self exp in
+    match exp.exp_desc with
+    | Texp_apply (func, _) -> if filter_func func then
+      ({  exp_desc = inject_then_run_node exp ~inject:(emit_node exp.exp_env "meow")
         ; exp_loc = exp.exp_loc
         ; exp_extra = exp.exp_extra
         ; exp_type = exp.exp_type
@@ -203,4 +213,28 @@ let inject_mapper =
   }
 
 (* exposed for compile_commmon *)
-let inject_instrumentation ~inject (tast : Typedtree.implementation) = if inject then {tast with structure=(inject_mapper.Tast_mapper.structure inject_mapper tast.structure)} else tast
+let inject_instrumentation ~inject (tast : Typedtree.implementation) =
+  if not inject then tast
+  else
+    let structure = tast.structure in
+    (* translate the external against the environment the unit opened with, so
+       that [string] and [unit] cannot have been shadowed by the unit itself *)
+    let decl_env =
+      match structure.str_items with
+      | item :: _ -> item.str_env
+      | [] -> structure.str_final_env
+    in
+    let wire_emit, _env =
+      Typedecl.transl_prim_desc decl_env Location.none wire_external
+    in
+    let mapper = inject_mapper wire_emit in
+    let structure = mapper.Tast_mapper.structure mapper structure in
+    let wire_item : Typedtree.structure_item =
+      { str_desc = Typedtree.Tstr_primitive wire_emit
+      ; str_loc = Location.none
+      ; str_env = decl_env }
+    in
+    (* [Tstr_primitive] contributes no field to the module block, so prepending
+       it leaves [str_type] and the coercion [Typemod] computed still valid *)
+    { tast with
+      structure = { structure with str_items = wire_item :: structure.str_items } }

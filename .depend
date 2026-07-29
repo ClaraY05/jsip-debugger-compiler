@@ -388,6 +388,7 @@ typing/vreplay_instrumentation.cmo : \
     typing/typedtree.cmi  \
     parsing/pprintast.cmi \
     typing/typecore.cmi \
+    typing/typedecl.cmi \
     typing/shape.cmi \
     typing/ident.cmi \
     typing/value_rec_types.cmi \
@@ -404,6 +405,7 @@ typing/vreplay_instrumentation.cmx : \
     driver/compile_common.cmx \
     parsing/pprintast.cmx \
     typing/typecore.cmx \
+    typing/typedecl.cmx \
     typing/shape.cmx \
     typing/ident.cmx \
     typing/value_rec_types.cmx \
