@@ -55,15 +55,31 @@ Fixed by giving the dump a single write path:
   `print_string_node` is gone; `inject_then_run_node` takes an `~emit`
   callback and pushes the markers through `caml_wire_emit` like the record.
 
-  `~inject` stays what it always was — an **arbitrary already-typed unit
+  `~inject` stays what it always was — an **arbitrary already-typed
   expression** — and `inject_then_run_node` knows nothing about what it does.
   The real instrumentation will be much more than a single `caml_wire_emit`
   call (traversing argument values, allocating, several writes), so nothing in
   that function assumes a string payload. It owns the `{}` markers and nothing
   else; terminating a record with a newline belongs to `~inject`.
+
+  It also no longer has to be `unit`. The `Tpat_any` binding that sequences it
+  before the call now takes `pat_type` from `inject.exp_type` instead of
+  asserting `Predef.type_unit`, so the value is discarded whatever its type.
+  Nothing downstream cares: `Matching.for_let` compiles a `Tpat_any` binding to
+  a plain `Lsequence` and never reads `pat_type` (only the `Tpat_var` branch
+  does, via `Typeopt.value_kind`). Verified by temporarily injecting an
+  `int`-typed expression — build clean, dump byte-identical and balanced,
+  `-dtypedtree` prints fine. Constraining it to `unit` would only have forced
+  callers to build an `ignore` wrapper they don't need.
 - `runtime/snapshot.c` now writes its argument **verbatim** — no `[wire] `
   prefix, no injected newline — and the OCaml side owns all framing. It also
-  uses `caml_string_length` rather than relying on NUL termination.
+  keeps the `my_existing_function` helper intact — it is being worked on
+  separately, so only its body changed, not its name or signature.
+
+  It therefore still takes a NUL-terminated string, which would truncate a
+  record containing an embedded NUL. Not reachable today (records are printed
+  source text); if that changes it needs a length parameter and
+  `caml_string_length` at the call site.
 
 The output is now ordered, and it happens to land on exactly the shape
 `dump_reader.ml` already parses (frame-marker prefix, then the payload, one
