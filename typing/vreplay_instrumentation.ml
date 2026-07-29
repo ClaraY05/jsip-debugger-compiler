@@ -39,7 +39,6 @@ module Wire = struct
       List.map format_arg args
     in
     {location; function_type; function_data; argument_list}
-  ;;
 end
 
 (* the [external] we splice into each instrumented structure. [call_c_node]
@@ -74,7 +73,6 @@ let call_c_node input =
    pconst_desc = (Pconst_string (input, Location.none, None));
    pconst_loc = Location.none} in
  Ast_helper.Exp.apply callc_function [ (Nolabel, callc_arg) ]
-;;
 
 (* frame markers: the reader sums these to get call depth ({ is +1, } is -1),
    so they have to reach the dump in call order. emit them with
@@ -107,22 +105,20 @@ let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
 (* wrapper to run [exp] after doing some instrumentation [inject] along with
    enclosing frame markers. exp should be a Texp_apply to type check. *)
 (* This returns an exp_desc, not an actual exp. *)
-(* [inject] is any already-typed expression -- we deliberately don't care what
-   it does or what type it has, since the real instrumentation will be a lot
-   more than one emit. it writes the record and terminates it; we own only the
-   markers either side. [emit] is passed in because only the caller's env has
-   [wire_emit_name] in scope. [inject_after] is the post-call counterpart of
-   [inject]: it is handed the env in which [res_binder_name] holds the call's
-   result and whatever expression it returns runs between that binding and
-   the closing marker, so it can observe the result. if the call raises, it
-   never runs. *)
+(* [inject] and [inject_after] produce arbitrary already-typed expressions --
+   we deliberately don't care what they do or what type they have, since the
+   real instrumentation will be a lot more than one emit. they write records
+   and terminate them; we own only the markers either side. each is handed
+   the env at its sequencing point: [inject] the env before the call,
+   [inject_after] the env in which [res_binder_name] holds the call's
+   result -- it runs between that binding and the closing marker, so it can
+   observe the result, and if the call raises it never runs. [emit] is
+   passed in because only the caller's env has [wire_emit_name] in scope. *)
 let inject_then_run_node ?inject_after (exp : Typedtree.expression)
       ~(emit : Env.t -> string -> Typedtree.expression)
-      ~(inject : Typedtree.expression) =
-  let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ())
-  in
-  let res_ident = Ident.create_local res_binder_name
-  in
+      ~(inject : Env.t -> Typedtree.expression) =
+  let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ()) in
+  let res_ident = Ident.create_local res_binder_name in
   let res_val_desc : Types.value_description =
     { val_type=exp.exp_type
     ; val_kind=Types.Val_reg
@@ -131,112 +127,72 @@ let inject_then_run_node ?inject_after (exp : Typedtree.expression)
     ; val_uid=res_uid}
   in
   let env_with_res = Env.add_value res_ident res_val_desc exp.exp_env in
-  (* Emit the closing frame marker, then "return" the result *)
-  (* for me: Path.t * Longident.t loc * Types.value_description *)
-  let close_then_return =
-    mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
-    (Asttypes.Nonrecursive,
-    [{
-      vb_pat=
-        { pat_desc=Tpat_any
-        ; pat_loc=exp.exp_loc
-        ; pat_extra = []
-        ; pat_type = Predef.type_unit
-        ; pat_env = env_with_res
-        ; pat_attributes=exp.exp_attributes
-        }
-    ; vb_expr= emit env_with_res frame_close
-    ; vb_rec_kind = Value_rec_types.Dynamic
-    ; vb_attributes=exp.exp_attributes
-    ; vb_loc=exp.exp_loc
-    }]
-    , mk_exp exp env_with_res exp.exp_type
+  (* evaluate [rhs] for effect, then run [body]. pat_type comes from [rhs]
+     rather than [Predef.type_unit] so the rhs isn't forced to be unit --
+     the value is dropped either way, since [Matching.for_let] turns a
+     [Tpat_any] binding into an [Lsequence] without ever reading
+     pat_type. *)
+  let seq env (rhs : Typedtree.expression) body =
+    mk_exp exp env exp.exp_type (Typedtree.Texp_let
+      (Asttypes.Nonrecursive,
+      [{ vb_pat=
+           { pat_desc=Tpat_any
+           ; pat_loc=exp.exp_loc
+           ; pat_extra = []
+           ; pat_type = rhs.exp_type
+           ; pat_env = env
+           ; pat_attributes=exp.exp_attributes
+           }
+       ; vb_expr= rhs
+       ; vb_rec_kind = Value_rec_types.Dynamic
+       ; vb_attributes=exp.exp_attributes
+       ; vb_loc=exp.exp_loc
+       }], body))
+  in
+  (* [res_binder_name] read back: the whole wrapper's value *)
+  let read_result =
+    mk_exp exp env_with_res exp.exp_type
       (Typedtree.Texp_ident
         (Path.Pident res_ident
         , Location.mknoloc (Longident.Lident res_binder_name)
-        , res_val_desc))))
+        , res_val_desc))
   in
-  (* Run the post-call instrumentation, if any, between the result
-     binding and the closing marker. pat_type comes from the hook's
-     expression for the same reason as [inject]'s binding below. *)
+  let close_then_return =
+    seq env_with_res (emit env_with_res frame_close) read_result
+  in
+  (* the post-call instrumentation, if any, goes between the result
+     binding and the closing marker *)
   let after_close_then_return =
     match inject_after with
     | None -> close_then_return
-    | Some hook ->
-      let after : Typedtree.expression = hook env_with_res in
-      mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
-      (Asttypes.Nonrecursive,
-      [{
-        vb_pat=
-          { pat_desc=Tpat_any
-          ; pat_loc=exp.exp_loc
-          ; pat_extra = []
-          ; pat_type = after.exp_type
-          ; pat_env = env_with_res
-          ; pat_attributes=exp.exp_attributes
-          }
-      ; vb_expr= after
-      ; vb_rec_kind = Value_rec_types.Dynamic
-      ; vb_attributes=exp.exp_attributes
-      ; vb_loc=exp.exp_loc
-      }], close_then_return))
+    | Some hook -> seq env_with_res (hook env_with_res) close_then_return
   in
-  (* First emit the opening frame marker *)
-  Typedtree.Texp_let (Asttypes.Nonrecursive,
-  [{
-    vb_pat=
-      { pat_desc=Tpat_any
-      ; pat_loc=exp.exp_loc
-      ; pat_extra = []
-      ; pat_type = Predef.type_unit
-      ; pat_env = exp.exp_env
-      ; pat_attributes=exp.exp_attributes
-      }
-  ; vb_expr= emit exp.exp_env frame_open
-  ; vb_rec_kind = Value_rec_types.Dynamic
-  ; vb_attributes=exp.exp_attributes
-  ; vb_loc=exp.exp_loc
-  }], mk_exp exp exp.exp_env exp.exp_type
-  (* Then, run our instrumentation. pat_type comes from [inject] rather than
-     [Predef.type_unit] so it isn't forced to be unit -- the value is dropped
-     either way, since [Matching.for_let] turns a [Tpat_any] binding into an
-     [Lsequence] without ever reading pat_type. *)
-  (Typedtree.Texp_let (Asttypes.Nonrecursive,
-  [{
-    vb_pat=
-      { pat_desc=Tpat_any
-      ; pat_loc=exp.exp_loc
-      ; pat_extra = []
-      ; pat_type = inject.exp_type
-      ; pat_env = exp.exp_env
-      ; pat_attributes=exp.exp_attributes
-      }
-  ; vb_expr= inject
-  ; vb_rec_kind = Value_rec_types.Dynamic
-  ; vb_attributes=exp.exp_attributes
-  ; vb_loc=exp.exp_loc
-  }]
-   (* Then evaluate the function and bind the result *)
-  , mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
-  (Asttypes.Nonrecursive,
-  [{
-    vb_pat=
-    (* for me: Ident.t * string loc * Uid.t *)
-      { pat_desc=
-          Typedtree.Tpat_var
-            (res_ident, Location.mknoloc res_binder_name, res_uid)
-      ; pat_loc=exp.exp_loc
-      ; pat_extra = []
-      ; pat_type = exp.exp_type
-      ; pat_env = env_with_res
-      ; pat_attributes=exp.exp_attributes
-      }
-  ; vb_expr= exp
-  ; vb_rec_kind = Value_rec_types.Dynamic
-  ; vb_attributes=exp.exp_attributes
-  ; vb_loc=exp.exp_loc
-  }]
-  , after_close_then_return)))))
+  (* evaluate the call and bind its result *)
+  let bind_result_then_rest =
+    mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
+      (Asttypes.Nonrecursive,
+      [{ vb_pat=
+           { pat_desc=
+               Typedtree.Tpat_var
+                 (res_ident, Location.mknoloc res_binder_name, res_uid)
+           ; pat_loc=exp.exp_loc
+           ; pat_extra = []
+           ; pat_type = exp.exp_type
+           ; pat_env = env_with_res
+           ; pat_attributes=exp.exp_attributes
+           }
+       ; vb_expr= exp
+       ; vb_rec_kind = Value_rec_types.Dynamic
+       ; vb_attributes=exp.exp_attributes
+       ; vb_loc=exp.exp_loc
+       }], after_close_then_return))
+  in
+  (* the opening frame marker, then the record, then the call *)
+  let whole =
+    seq exp.exp_env (emit exp.exp_env frame_open)
+      (seq exp.exp_env (inject exp.exp_env) bind_result_then_rest)
+  in
+  whole.exp_desc
 
 (* whether operations on a structure return it (traverse the result) or
    update it in place (traverse the mutated argument, after the call).
@@ -343,17 +299,11 @@ let inject_mapper (wire_emit : Typedtree.primitive_description) =
       begin match classify exp func with
       | None -> recurse_down
       | Some Result ->
-        ({  exp_desc =
-              inject_then_run_node recurse_down ~emit:emit_node
-                ~inject:(emit_node exp.exp_env placeholder_record)
-                ~inject_after:
-                  (fun env -> emit_node env root_placeholder)
-          ; exp_loc = exp.exp_loc
-          ; exp_extra = exp.exp_extra
-          ; exp_type = exp.exp_type
-          ; exp_env = exp.exp_env
-          ; exp_attributes = exp.exp_attributes
-        } : Typedtree.expression)
+        { exp with
+          exp_desc =
+            inject_then_run_node recurse_down ~emit:emit_node
+              ~inject:(fun env -> emit_node env placeholder_record)
+              ~inject_after:(fun env -> emit_node env root_placeholder) }
       end
     | _ -> recurse_down
   in
