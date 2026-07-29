@@ -36,7 +36,7 @@ end
 (* This will hopefully be our external C function *)
 let snapshot _x _y _z = _x
 
-(* makes an expression by passing down parent fields for all but desc and type *)
+(* makes an expression by passing down parent fields for all but env, desc, and type *)
 let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc : Typedtree.expression = 
   { exp_desc
   ; exp_loc=parent.exp_loc
@@ -45,8 +45,7 @@ let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc : Typedtree
   ; exp_env
   ; exp_attributes=parent.exp_attributes}
 
-
-(* print a generic string *)
+(* print a generic string input given typing env *)
 let print_string_node env input = Typecore.type_expression env (
  let module_longident = Longident.Lident "Printf" in
  let print_longident = Longident.Ldot (Location.mknoloc module_longident, Location.mknoloc "printf") in
@@ -63,7 +62,7 @@ let print_string_node env input = Typecore.type_expression env (
   print_string_node exp.exp_env (Sexplib.Sexp.to_string_hum (Wire.sexp_of_t wire_data)) *)
 
 
-(* wrapper to actually run the given function after doing some instrumentation (which should return unit) along with enclosing brackets. exp should be a Texp_apply to type check. *)
+(* wrapper to run run after doing some instrumentation f (which should return unit) along with enclosing brackets. exp should be a Texp_apply to type check. *)
 (* This returns an exp_desc, not an actual exp. *)
 let f_then_run_node (exp : Typedtree.expression) ~f ~run:((func : Typedtree.expression), args) = 
   let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ())
@@ -154,8 +153,6 @@ let f_then_run_node (exp : Typedtree.expression) ~f ~run:((func : Typedtree.expr
 
 (* Returns true if an event has occurred based on the function expression *)
 let filter_func (_func : Typedtree.expression) = true
-
-
 
 (* This is our special mapper that changes pexp_applies where an event occurs*)
 let inject_mapper = 
