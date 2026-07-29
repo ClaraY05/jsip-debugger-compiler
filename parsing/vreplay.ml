@@ -46,11 +46,26 @@ end*)
  Ast_helper.Exp.apply print_function [ (Nolabel, print_arg) ]
 ;;*)
 
+(* the [external] we splice into each instrumented structure *)
+let wire_external =
+  let ty_constr name =
+    Ast_helper.Typ.constr (Location.mknoloc (Longident.Lident name)) []
+  in
+  let emit_type =
+    Ast_helper.Typ.arrow Nolabel (ty_constr "string") (ty_constr "unit")
+  in
+  Ast_helper.Str.primitive
+    (Ast_helper.Prim.mk_decl
+       ~prim:[ "caml_wire_emit" ]
+       (Location.mknoloc "__wire_emit")
+       emit_type)
+;;
+
+(* call a c function *)
 (* call a c function *)
 let call_c_node input =
- let module_longident = Longident.Lident "Snapshot" in
- let callc_longident = Longident.Ldot (Location.mknoloc module_longident, Location.mknoloc "emit") in
- let callc_function = Ast_helper.Exp.ident (Location.mknoloc callc_longident) in
+ let callc_function =
+   Ast_helper.Exp.ident (Location.mknoloc (Longident.Lident "__wire_emit")) in
  let callc_arg = Ast_helper.Exp.constant {
    pconst_desc = (Pconst_string (input, Location.none, None));
    pconst_loc = Location.none} in
@@ -68,7 +83,7 @@ let print_then_run_node (exp : Parsetree.expression) (_func : Parsetree.expressi
       ; ppat_loc_stack=exp.pexp_loc_stack
       ; ppat_attributes=exp.pexp_attributes
       }
-  ; pvb_expr= call_c_node "meow"
+  ; pvb_expr= call_c_node "meow\n"
   ; pvb_constraint=None
   ; pvb_attributes=exp.pexp_attributes
   ; pvb_loc=exp.pexp_loc
@@ -113,7 +128,9 @@ let inject_mapper =
   }
 
   (* exposed for compile_commmon *)
-let inject_instrumentation ~inject ast = if inject then inject_mapper.Ast_mapper.structure inject_mapper ast else ast
+let inject_instrumentation ~inject ast = if inject
+  then wire_external :: inject_mapper.Ast_mapper.structure inject_mapper ast
+  else ast
 
 
 (* - we need to separate out function body pexp_applies
