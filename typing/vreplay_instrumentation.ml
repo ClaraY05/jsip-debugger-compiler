@@ -41,53 +41,53 @@ module Wire = struct
     {location; function_type; function_data; argument_list}
 end
 
-(* the [external] we splice into each instrumented structure. [call_c_node]
-   refers to it by this name, so the declaration and the call sites must
-   agree. *)
-let wire_emit_name = "__wire_emit"
+(* [external __wire_emit : string -> unit = "caml_wire_emit"], spliced
+   into each instrumented unit; every byte of the dump goes through it *)
+module Emit = struct
+  let name = "__wire_emit"
+  let c_name = "caml_wire_emit"      (* defined in runtime/snapshot.c *)
 
-(* the C primitive behind it, defined in runtime/snapshot.c *)
-let wire_emit_prim_name = "caml_wire_emit"
+  let decl =
+    let ty_constr id =
+      Ast_helper.Typ.constr (Location.mknoloc (Longident.Lident id)) []
+    in
+    Ast_helper.Prim.mk_decl
+      ~prim:[ c_name ]
+      (Location.mknoloc name)
+      (Ast_helper.Typ.arrow Nolabel (ty_constr "string")
+         (ty_constr "unit"))
 
-let wire_external =
-  let ty_constr name =
-    Ast_helper.Typ.constr (Location.mknoloc (Longident.Lident name)) []
-  in
-  let emit_type =
-    Ast_helper.Typ.arrow Nolabel (ty_constr "string") (ty_constr "unit")
-  in
-  Ast_helper.Prim.mk_decl
-    ~prim:[ wire_emit_prim_name ]
-    (Location.mknoloc wire_emit_name)
-    emit_type
+  (* the untyped call [__wire_emit <payload>] *)
+  let call payload =
+    Ast_helper.Exp.apply
+      (Ast_helper.Exp.ident (Location.mknoloc (Longident.Lident name)))
+      [ (Nolabel
+        , Ast_helper.Exp.constant
+            { pconst_desc = Pconst_string (payload, Location.none, None)
+            ; pconst_loc = Location.none }) ]
 
-(* the binding that holds an instrumented call's result. future call sites
-   will refer to it by name, so declaration and uses must agree. *)
+  (* the typedtree's envs were snapshotted before [decl] was spliced in,
+     so re-add the prim before typing the call *)
+  let typed_call (prim : Typedtree.primitive_description) env payload =
+    Typecore.type_expression
+      (Env.add_value prim.prim_id prim.prim_val env)
+      (call payload)
+end
+
+(* the binding that holds an instrumented call's result; hook call sites
+   will refer to it by name *)
 let res_binder_name = "__vreplay_res"
 
-(* the untyped call [__wire_emit <input>] *)
-let call_c_node input =
- let callc_function =
-   Ast_helper.Exp.ident (Location.mknoloc (Longident.Lident wire_emit_name)) in
- let callc_arg = Ast_helper.Exp.constant {
-   pconst_desc = (Pconst_string (input, Location.none, None));
-   pconst_loc = Location.none} in
- Ast_helper.Exp.apply callc_function [ (Nolabel, callc_arg) ]
-
-(* frame markers: the reader sums these to get call depth ({ is +1, } is -1),
-   so they have to reach the dump in call order. emit them with
-   [caml_wire_emit], not [Printf.printf] -- printf buffers in OCaml's stdout
-   channel and only flushes at exit, so mixing the two put every marker in the
-   run after every record. *)
+(* the reader sums these into call depth ({ +1, } -1). always emitted
+   through [caml_wire_emit]: [Printf] buffers in the stdout channel and
+   would decouple markers from records (REVIEW_FINDINGS #2). *)
 let frame_open = "{"
 let frame_close = "}"
 
-(* stand-in until we can serialize a real record. note the trailing newline --
-   whatever replaces this has to terminate its own record *)
+(* stand-ins until real serialization; records terminate themselves,
+   hence the newlines. [root_placeholder] marks the traversal-root
+   hand-off until the runtime registry's C entry point exists. *)
 let placeholder_record = "meow\n"
-
-(* stand-in for the traversal-root hand-off, until the runtime registry's
-   C entry point exists. same newline rule. *)
 let root_placeholder = "ROOT\n"
 
 (* a synthesized expression: parent supplies only the loc. attributes stay
@@ -101,15 +101,12 @@ let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
   ; exp_env
   ; exp_attributes=[]}
 
-(* wrap [exp] (a Texp_apply) in frame markers plus instrumentation; returns
-   an exp_desc. [inject] and [inject_after] produce arbitrary already-typed
-   expressions -- what they do is deliberately not our business; they own
-   record termination, we own the markers. each receives the env at its
-   sequencing point: [inject] before the call, [inject_after] with the
-   result bound to [res_binder_name] -- it can observe the result, and a
-   raising call skips it. [emit] comes from the caller, whose env has
-   [wire_emit_name] in scope. *)
-let inject_then_run_node ?inject_after (exp : Typedtree.expression)
+(* wrap [exp] (a Texp_apply) in frame markers: [inject] runs before the
+   call, [inject_after] after it with the result bound to
+   [res_binder_name] (skipped if the call raises). the hooks build
+   arbitrary typed expressions against the env they receive; [emit] is a
+   parameter because only the caller can type it. returns an exp_desc. *)
+let instrument_call ?inject_after (exp : Typedtree.expression)
       ~(emit : Env.t -> string -> Typedtree.expression)
       ~(inject : Env.t -> Typedtree.expression) =
   let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ()) in
@@ -142,23 +139,22 @@ let inject_then_run_node ?inject_after (exp : Typedtree.expression)
        ; vb_loc=exp.exp_loc
        }], body))
   in
-  (* [res_binder_name] read back: the whole wrapper's value *)
-  let read_result =
+  (* [tail] accumulates inside-out: read the result back, close the
+     frame, run the post-call hook, bind the result *)
+  let tail =
     mk_exp exp env_with_res exp.exp_type
       (Typedtree.Texp_ident
         (Path.Pident res_ident
         , Location.mknoloc (Longident.Lident res_binder_name)
         , res_val_desc))
   in
-  let close_then_return =
-    seq env_with_res (emit env_with_res frame_close) read_result
-  in
-  let after_close_then_return =
+  let tail = seq env_with_res (emit env_with_res frame_close) tail in
+  let tail =
     match inject_after with
-    | None -> close_then_return
-    | Some hook -> seq env_with_res (hook env_with_res) close_then_return
+    | None -> tail
+    | Some hook -> seq env_with_res (hook env_with_res) tail
   in
-  let bind_result_then_rest =
+  let tail =
     mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
       (Asttypes.Nonrecursive,
       [{ vb_pat=
@@ -175,14 +171,10 @@ let inject_then_run_node ?inject_after (exp : Typedtree.expression)
        ; vb_rec_kind = Value_rec_types.Dynamic
        ; vb_attributes=[]
        ; vb_loc=exp.exp_loc
-       }], after_close_then_return))
+       }], tail))
   in
-  (* the opening frame marker, then the record, then the call *)
-  let whole =
-    seq exp.exp_env (emit exp.exp_env frame_open)
-      (seq exp.exp_env (inject exp.exp_env) bind_result_then_rest)
-  in
-  whole.exp_desc
+  (seq exp.exp_env (emit exp.exp_env frame_open)
+     (seq exp.exp_env (inject exp.exp_env) tail)).exp_desc
 
 (* [Immutable] ops return the structure: the traversal root is the result.
    [Mutable] (phase 2) will root at the mutated argument instead; declaring
@@ -250,21 +242,10 @@ let classify (exp : Typedtree.expression)
   | _ -> None
 
 (* the mapper that rewrites each [Texp_apply] where an event occurs *)
-let inject_mapper (wire_emit : Typedtree.primitive_description) =
+let inject_mapper (emit_prim : Typedtree.primitive_description) =
   let super = Tast_mapper.default in
+  let emit env payload = Emit.typed_call emit_prim env payload in
 
-  (* [call_c_node] refers to [wire_emit_name], which is only in scope because
-     [inject_instrumentation] splices the declaration into the structure. The
-     environments hanging off the typedtree were snapshotted by [Typemod]
-     before that happened, so the binding has to be added back before typing
-     the call. *)
-  let emit_node env payload =
-    Typecore.type_expression
-      (Env.add_value wire_emit.prim_id wire_emit.prim_val env)
-      (call_c_node payload)
-  in
-
-  (* this function injects our custom instrumentation at every event *)
   let inject_expression self (exp : Typedtree.expression) =
     let recurse_down : Typedtree.expression = super.expr self exp in
     match exp.exp_desc with
@@ -274,41 +255,38 @@ let inject_mapper (wire_emit : Typedtree.primitive_description) =
       | Some Result ->
         { exp with
           exp_desc =
-            inject_then_run_node recurse_down ~emit:emit_node
-              ~inject:(fun env -> emit_node env placeholder_record)
-              ~inject_after:(fun env -> emit_node env root_placeholder) }
+            instrument_call recurse_down ~emit
+              ~inject:(fun env -> emit env placeholder_record)
+              ~inject_after:(fun env -> emit env root_placeholder) }
       end
     | _ -> recurse_down
   in
-  {
-    super with
-    Tast_mapper.expr = inject_expression
-  }
+  { super with Tast_mapper.expr = inject_expression }
 
 (* exposed for compile_common *)
 let inject_instrumentation ~inject (tast : Typedtree.implementation) =
   if not inject then tast
   else
     let structure = tast.structure in
-    (* translate the external against the environment the unit opened with, so
-       that [string] and [unit] cannot have been shadowed by the unit itself *)
+    (* type the declaration in the env the unit opened with, so [string]
+       and [unit] cannot have been shadowed by the unit itself *)
     let decl_env =
       match structure.str_items with
       | item :: _ -> item.str_env
       | [] -> structure.str_final_env
     in
-    let wire_emit, _env =
-      Typedecl.transl_prim_desc decl_env Location.none wire_external
+    let emit_prim, _env =
+      Typedecl.transl_prim_desc decl_env Location.none Emit.decl
     in
-    let mapper = inject_mapper wire_emit in
+    let mapper = inject_mapper emit_prim in
     let structure = mapper.Tast_mapper.structure mapper structure in
-    let wire_item : Typedtree.structure_item =
-      { str_desc = Typedtree.Tstr_primitive wire_emit
+    let emit_item : Typedtree.structure_item =
+      { str_desc = Typedtree.Tstr_primitive emit_prim
       ; str_loc = Location.none
       ; str_env = decl_env }
     in
-    (* [Tstr_primitive] contributes no field to the module block, so prepending
-       it leaves [str_type] and the coercion [Typemod] computed still valid *)
+    (* [Tstr_primitive] adds no field to the module block, so prepending
+       it leaves [str_type] and [Typemod]'s coercion valid *)
     { tast with
       structure =
-        { structure with str_items = wire_item :: structure.str_items } }
+        { structure with str_items = emit_item :: structure.str_items } }

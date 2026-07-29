@@ -197,11 +197,12 @@ not opam. Without ppx the attribute is *silently ignored*: there is no `sexp_of_
 injection hardcodes `placeholder_record = "meow\n"`. Solving it is the main blocker on
 the compiler side.
 
-Note `inject_then_run_node` takes `~inject` as an **arbitrary already-typed unit
-expression** and knows nothing about what it does — the real instrumentation will be a
-good deal more than one `caml_wire_emit` call (traversing argument values, allocating,
-several writes). Keep it that way; don't push string-payload assumptions back into it.
-It owns only the `{}` markers. Terminating a record with a newline is `~inject`'s job.
+Note `instrument_call` (formerly `inject_then_run_node`) takes `~inject` and
+`~inject_after` as closures producing **arbitrary already-typed expressions** and knows
+nothing about what they do — the real instrumentation will be a good deal more than one
+`caml_wire_emit` call (traversing argument values, allocating, several writes). Keep it
+that way; don't push string-payload assumptions back into it. It owns only the `{}`
+markers. Terminating a record with a newline is the hooks' job.
 
 **3. Filtering — fixed.** `filter_func` (which returned `true` unconditionally) is now
 `classify`: an application is an event iff its function *and* its result type's head
