@@ -105,11 +105,10 @@ let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
   ; exp_env
   ; exp_attributes=parent.exp_attributes}
 
-(* wrapper to run [exp] after doing some instrumentation [inject] (which should
-   be unit) along with enclosing frame markers. exp should be a Texp_apply to
-   type check. *)
+(* wrapper to run [exp] after doing some instrumentation [inject], along with
+   enclosing frame markers. exp should be a Texp_apply to type check. *)
 (* This returns an exp_desc, not an actual exp. *)
-(* [inject] is an arbitrary already-typed unit expression, and this function
+(* [inject] is an arbitrary already-typed expression, and this function
    deliberately knows nothing about what it does. Today it happens to be a
    single [caml_wire_emit] call, but it is meant to grow into whatever walking
    and dumping a data structure takes -- several calls, allocation, traversal
@@ -117,6 +116,12 @@ let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
    Emitting the record and terminating it (with a newline, so the frame markers
    of the next record start a fresh line) is [inject]'s job; this function owns
    only the markers on either side.
+
+   It does not have to be [unit] either. It is bound with [Tpat_any] purely to
+   sequence it before the call, and the binding takes its type from
+   [inject.exp_type], so the value is discarded whatever it is. Constraining it
+   to [unit] would only force the caller to build an [ignore] wrapper it does
+   not need.
 
    [emit] builds an already-typed unit expression that pushes its argument
    through [caml_wire_emit]. It has to be passed in because only the caller has
@@ -154,14 +159,20 @@ let inject_then_run_node (exp : Typedtree.expression)
   }], mk_exp exp exp.exp_env exp.exp_type
   (* Then, run our instrumentation. Whatever it writes is this record; the
      markers emitted before it are what the reader turns into the record's
-     depth delta. *)
+     depth delta.
+
+     The pattern takes its type from [inject] rather than asserting
+     [Predef.type_unit], so the instrumentation is free to have whatever type
+     it ends up with -- see the note on [~inject] above. Its value is
+     discarded either way: [Matching.for_let] compiles a [Tpat_any] binding to
+     a plain [Lsequence] and never looks at [pat_type]. *)
   (Typedtree.Texp_let (Asttypes.Nonrecursive,
   [{
     vb_pat=
       { pat_desc=Tpat_any
       ; pat_loc=exp.exp_loc
       ; pat_extra = []
-      ; pat_type = Predef.type_unit
+      ; pat_type = inject.exp_type
       ; pat_env = exp.exp_env
       ; pat_attributes=exp.exp_attributes
       }
