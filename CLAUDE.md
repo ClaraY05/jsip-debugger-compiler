@@ -106,25 +106,44 @@ expected, not your change. `make depend` and commit it once to be rid of it.
 ```
 
 `.tmp_files/tmp.ml` is the authors' scratch file and its contents change often, so it is
-a poor thing to check expected output against. For a stable smoke test use a snippet
-whose call count you know:
+a poor thing to check expected output against. Since `classify` landed, only calls into
+modules listed in its `ds_table` (currently `Map.Make` products) are instrumented, so
+plain-function programs are the *negative* smoke test — their dump must be empty:
 
 ```sh
-printf 'let g x = x + 1\nlet f x = x + 2\nlet () = ignore (f (g 1))\n' > /tmp/t.ml
+printf 'let g x = x + 1\nlet f x = x + 2\nlet () = ignore (f (g 1))\n' > /tmp/neg.ml
+./ocamlc -visual-replay -o /tmp/neg.out /tmp/neg.ml && /tmp/neg.out | wc -c   # 0
+```
+
+The positive smoke test needs a Map program:
+
+```sh
+cat > /tmp/t.ml <<'EOF'
+module M = Map.Make (String)
+let () =
+  let m = M.empty in
+  let m = M.add "a" 1 m in
+  let m = M.add "b" 2 m in
+  let m = M.remove "a" m in
+  ignore (M.find "b" m)
+EOF
 ./ocamlc -visual-replay -o /tmp/t.out /tmp/t.ml && /tmp/t.out
 ```
 
-Five applications execute — `ignore`, `f`, `g` and the two `+` — so the dump has five
-frames and must end at depth 0. One record per line, each prefixed by the frame markers
-giving its depth delta (`{` is +1, `}` is −1); the payload is still the literal `meow`:
+Three events fire — the two `M.add` and the `M.remove`; `empty` (not an application),
+`find` and `ignore` (not events) don't. One record per line, each prefixed by the frame
+markers giving its depth delta (`{` is +1, `}` is −1); the payload is still the literal
+`meow`, and `ROOT` is the placeholder for the traversal-root hand-off that runs after
+each call returns, inside its frame:
 
 ```
 {meow
-{meow
-{meow
-{meow
-}}{meow
-}}}
+ROOT
+}{meow
+ROOT
+}{meow
+ROOT
+}
 ```
 
 **All of that goes through `caml_wire_emit`**, markers included. Do not reintroduce
@@ -184,10 +203,16 @@ good deal more than one `caml_wire_emit` call (traversing argument values, alloc
 several writes). Keep it that way; don't push string-payload assumptions back into it.
 It owns only the `{}` markers. Terminating a record with a newline is `~inject`'s job.
 
-**3. `filter_func` is a stub.** It returns `true` unconditionally, so *every* function
-application is instrumented, `+` and `^` included. The intended behavior is to fire only
-on data-structure creation/manipulation (see `vreplay/README.md`). Now that every marker
-is an unbuffered flushing write, this costs real time as well as noise.
+**3. Filtering — fixed.** `filter_func` (which returned `true` unconditionally) is now
+`classify`: an application is an event iff its function *and* its result type's head
+constructor were declared in a compilation unit listed in `ds_table` — provenance read
+off `val_uid`/`type_uid`, which survives `Map.Make` application, `open`, `include` and
+aliasing. Phase 1 covers `Stdlib__Map` only. Each event also runs a post-call
+`~inject_after` hook, sequenced between the result binding and the closing `}`, which
+emits a `ROOT` placeholder where the result — the traversal root of an immutable
+structure — will be handed to the runtime registry once its C entry point exists.
+Mutable structures (root = the mutated argument) are deferred; design notes sit in the
+code. See `REVIEW_FINDINGS.md` #12 for details and the accepted misses.
 
 **4. The `-visual-replay` help text is mangled.** `driver/main_args.ml:698-700` has a
 literal newline inside the string, so `./ocamlc -help` prints it across two lines.
@@ -333,7 +358,8 @@ avoid editor format-on-save in `runtime/`, `parsing/`, and the root `dune`.
 |---|---|
 | `trunk` | **Pure upstream**, exactly `511483454`. Read-only reference / fork point. |
 | `sexp_pipe` | **The integration tip — work here.** |
-| `vreplay-main`, `runtime-memory` | Stale duplicates, both at `ff43cdaa0`, 7 commits behind. |
+| `vreplay-main` | Currently the same commit as `sexp_pipe` (it was fast-forwarded); still treat `sexp_pipe` as the PR base. |
+| `runtime-memory` | Stale, at `ff43cdaa0`, behind the tip. |
 | `print_ast_node` (local) | Has 3 commits not merged anywhere. |
 
 Commit style is informal and mixed (`feat:`/`fix:` alongside freeform). Match whatever

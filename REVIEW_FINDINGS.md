@@ -241,13 +241,31 @@ variable, in the style of `OCAMLRUNPARAM`) would fix this and is probably a
 prerequisite for the TUI reading a live program. Note `dump_reader.ml` already
 reads a *file path*, never stdin.
 
-### 12. Every application is instrumented — **open**
+### 12. Every application is instrumented — **fixed**
 
-`filter_func` returns `true` unconditionally, so `+` and `^` are traced along
-with everything else. Intended behaviour, per `vreplay/README.md`, is to fire
-only on data-structure creation and manipulation. Until then the dumps are far
-larger than they need to be, and now that every marker is an unbuffered
-flushing write, this costs real time.
+`filter_func` returned `true` unconditionally, so `+` and `^` were traced
+along with everything else. Replaced by `classify`, which implements the
+"DS traversal info table" from `vreplay/README.md`: an application is an
+event iff its function was *declared* in a compilation unit listed in
+`ds_table`, **and** its result type's head constructor is declared in that
+same unit — i.e. the call returns the structure. Provenance is read off
+`val_uid`/`type_uid` (`Shape.Uid.Item {comp_unit; _}`), which `Subst`
+copies verbatim, so detection survives `Map.Make` application, `include`,
+`open` and aliasing. The second check doubles as root selection for an
+immutable structure: the result *is* the traversal root, so each event now
+runs a post-call hook (`~inject_after`, sequenced between the result
+binding and the closing `}`) that will hand the result to the runtime
+registry; until that C entry point lands it emits a `ROOT\n` placeholder
+line. Phase 1 covers `Stdlib__Map` only; mutable modules need an
+argument root (design notes in the code) and are deferred.
+
+Deliberate misses, documented in the code: `M.empty` (an ident, not an
+application — the map is observed at its first manipulation), access
+through functor parameters or first-class modules (`Local_opaque_item`
+uids name the *using* unit, so they fail closed), and rebound functions
+(`let add = M.add`). Harmless over-approximations: `find` on a map whose
+values are maps, and `fold` with a map accumulator, return a map and so
+re-observe an existing structure.
 
 ### 13. Wire-format mismatches with the interface — **open**
 

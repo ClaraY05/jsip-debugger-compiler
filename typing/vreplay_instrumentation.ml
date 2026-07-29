@@ -59,6 +59,13 @@ let wire_external =
     (Location.mknoloc wire_emit_name)
     emit_type
 
+(* name of the binding that holds an instrumented call's result. the
+   follow-up that hands the traversal root to the runtime registry will
+   refer to it by name (typing a call against the env it is bound in),
+   so the declaration in [inject_then_run_node] and those call sites
+   must agree, like [wire_emit_name] above. *)
+let res_binder_name = "__vreplay_res"
+
 (* call a c function *)
 let call_c_node input =
  let callc_function =
@@ -81,6 +88,11 @@ let frame_close = "}"
    whatever replaces this has to terminate its own record *)
 let placeholder_record = "meow\n"
 
+(* stand-in for the traversal-root hand-off: marks where in the frame
+   the call passing [res_binder_name]'s value to the runtime registry
+   will run, once that C entry point exists. same newline rule. *)
+let root_placeholder = "ROOT\n"
+
 (* makes an expression by passing down parent fields for all but env, desc,
    and type *)
 let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
@@ -99,13 +111,17 @@ let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
    it does or what type it has, since the real instrumentation will be a lot
    more than one emit. it writes the record and terminates it; we own only the
    markers either side. [emit] is passed in because only the caller's env has
-   [wire_emit_name] in scope. *)
-let inject_then_run_node (exp : Typedtree.expression)
+   [wire_emit_name] in scope. [inject_after] is the post-call counterpart of
+   [inject]: it is handed the env in which [res_binder_name] holds the call's
+   result and whatever expression it returns runs between that binding and
+   the closing marker, so it can observe the result. if the call raises, it
+   never runs. *)
+let inject_then_run_node ?inject_after (exp : Typedtree.expression)
       ~(emit : Env.t -> string -> Typedtree.expression)
       ~(inject : Typedtree.expression) =
   let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ())
   in
-  let res_ident = Ident.create_local "res"
+  let res_ident = Ident.create_local res_binder_name
   in
   let res_val_desc : Types.value_description =
     { val_type=exp.exp_type
@@ -115,6 +131,56 @@ let inject_then_run_node (exp : Typedtree.expression)
     ; val_uid=res_uid}
   in
   let env_with_res = Env.add_value res_ident res_val_desc exp.exp_env in
+  (* Emit the closing frame marker, then "return" the result *)
+  (* for me: Path.t * Longident.t loc * Types.value_description *)
+  let close_then_return =
+    mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
+    (Asttypes.Nonrecursive,
+    [{
+      vb_pat=
+        { pat_desc=Tpat_any
+        ; pat_loc=exp.exp_loc
+        ; pat_extra = []
+        ; pat_type = Predef.type_unit
+        ; pat_env = env_with_res
+        ; pat_attributes=exp.exp_attributes
+        }
+    ; vb_expr= emit env_with_res frame_close
+    ; vb_rec_kind = Value_rec_types.Dynamic
+    ; vb_attributes=exp.exp_attributes
+    ; vb_loc=exp.exp_loc
+    }]
+    , mk_exp exp env_with_res exp.exp_type
+      (Typedtree.Texp_ident
+        (Path.Pident res_ident
+        , Location.mknoloc (Longident.Lident res_binder_name)
+        , res_val_desc))))
+  in
+  (* Run the post-call instrumentation, if any, between the result
+     binding and the closing marker. pat_type comes from the hook's
+     expression for the same reason as [inject]'s binding below. *)
+  let after_close_then_return =
+    match inject_after with
+    | None -> close_then_return
+    | Some hook ->
+      let after : Typedtree.expression = hook env_with_res in
+      mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
+      (Asttypes.Nonrecursive,
+      [{
+        vb_pat=
+          { pat_desc=Tpat_any
+          ; pat_loc=exp.exp_loc
+          ; pat_extra = []
+          ; pat_type = after.exp_type
+          ; pat_env = env_with_res
+          ; pat_attributes=exp.exp_attributes
+          }
+      ; vb_expr= after
+      ; vb_rec_kind = Value_rec_types.Dynamic
+      ; vb_attributes=exp.exp_attributes
+      ; vb_loc=exp.exp_loc
+      }], close_then_return))
+  in
   (* First emit the opening frame marker *)
   Typedtree.Texp_let (Asttypes.Nonrecursive,
   [{
@@ -150,13 +216,15 @@ let inject_then_run_node (exp : Typedtree.expression)
   ; vb_attributes=exp.exp_attributes
   ; vb_loc=exp.exp_loc
   }]
-   (* Then evaluate the function and bind to res *)
+   (* Then evaluate the function and bind the result *)
   , mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
   (Asttypes.Nonrecursive,
   [{
     vb_pat=
     (* for me: Ident.t * string loc * Uid.t *)
-      { pat_desc=Typedtree.Tpat_var (res_ident, Location.mknoloc "res", res_uid)
+      { pat_desc=
+          Typedtree.Tpat_var
+            (res_ident, Location.mknoloc res_binder_name, res_uid)
       ; pat_loc=exp.exp_loc
       ; pat_extra = []
       ; pat_type = exp.exp_type
@@ -168,34 +236,89 @@ let inject_then_run_node (exp : Typedtree.expression)
   ; vb_attributes=exp.exp_attributes
   ; vb_loc=exp.exp_loc
   }]
-   (* Emit the closing frame marker *)
-  , mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
-  (Asttypes.Nonrecursive,
-  [{
-    vb_pat=
-      { pat_desc=Tpat_any
-      ; pat_loc=exp.exp_loc
-      ; pat_extra = []
-      ; pat_type = Predef.type_unit
-      ; pat_env = env_with_res
-      ; pat_attributes=exp.exp_attributes
-      }
-  ; vb_expr= emit env_with_res frame_close
-  ; vb_rec_kind = Value_rec_types.Dynamic
-  ; vb_attributes=exp.exp_attributes
-  ; vb_loc=exp.exp_loc
-  }]
-   (* "return" the result *)
-   (* for me: Path.t * Longident.t loc * Types.value_description *)
-  , mk_exp exp env_with_res exp.exp_type
-    (Typedtree.Texp_ident
-      (Path.Pident res_ident
-      , Location.mknoloc (Longident.Lident "res")
-      , res_val_desc)
-  ))))))))
+  , after_close_then_return)))))
 
-(* Returns true if an event has occurred based on the function expression *)
-let filter_func (_func : Typedtree.expression) = true
+(* whether operations on a structure return it (traverse the result) or
+   update it in place (traverse the mutated argument, after the call).
+   [Mutable] joins in phase 2 along with the argument root -- declaring
+   it before anything constructs it would trip warning 37. *)
+type mutability = Immutable
+
+(* the "DS traversal info table" (vreplay/README.md): the compilation
+   units whose structures the replay knows how to traverse, keyed on the
+   unit that declared the functions and types -- see [uid_comp_unit].
+   phase 1 is Map only; "Stdlib__Set", Immutable would be one more line,
+   mutable modules ("Stdlib__Hashtbl") also need the phase-2 root. *)
+let ds_table : (string * mutability) list =
+  [ "Stdlib__Map", Immutable ]
+
+(* where an event's traversal root lives. [Result]: the call returns the
+   new structure (immutable DS). phase 2, mutable DS, adds
+   [Argument of int]: the mutated argument, read after the call. two
+   traps to remember then: the index must count only [Arg]s ([Omitted]
+   sits in place in the list on labelled partial application), and
+   referring to an argument post-call must not re-evaluate or reorder it
+   -- arguments are applied right-to-left, so the safe subset is an
+   argument that is syntactically an ident. *)
+type root = Result
+
+(* the compilation unit a declaration originates from. uids are minted
+   where a declaration is written and copied verbatim by [Subst], so
+   they survive functor application, [include], [open] and aliasing:
+   [Map.Make(K).add] still says "Stdlib__Map". [Local_opaque_item] is
+   the deliberate exception -- it marks access through a functor
+   parameter or a first-class module, where the true origin is
+   unknowable at compile time, and it carries the *using* unit -- so it
+   must not count as provenance. fail closed on it and the rest. *)
+let uid_comp_unit : Shape.Uid.t -> string option = function
+  | Shape.Uid.Item { comp_unit; _ } -> Some comp_unit
+  | Shape.Uid.Compilation_unit _ | Shape.Uid.Local_opaque_item _
+  | Shape.Uid.Internal | Shape.Uid.Predef _ -> None
+
+(* an immutable-DS call is an event iff it returns the structure: the
+   result type's head constructor must be declared in the same unit as
+   the function. the one check excludes queries ([find]/[mem]/
+   [cardinal]), iteration ([iter]/[bindings]/[to_seq]) and partial
+   application (the head is an arrow, including the [Omitted]-argument
+   form). known over-approximations, both harmless in that they only
+   re-observe a structure that already exists: [find] on a map whose
+   values are maps, and [fold] whose accumulator is a map. *)
+let returns_the_structure comp_unit (exp : Typedtree.expression) =
+  match
+    Types.get_desc (Ctype.expand_head_nolink exp.exp_env exp.exp_type)
+  with
+  | Types.Tconstr (path, _, _) ->
+    begin match Env.find_type path exp.exp_env with
+    | decl ->
+      begin match uid_comp_unit decl.type_uid with
+      | Some type_unit -> String.equal type_unit comp_unit
+      | None -> false
+      end
+    | exception Not_found -> false
+    end
+  | _ -> false
+
+(* Decides whether the application [exp], whose function part is [func],
+   is an event, and if so where its traversal root lives. [None] means
+   don't instrument. deliberate misses: [M.empty] (an ident, not an
+   application -- the map is observed at its first manipulation), access
+   through functor parameters and first-class modules, and functions
+   rebound outside the module ([let add = M.add]). *)
+let classify (exp : Typedtree.expression)
+      (func : Typedtree.expression) : root option =
+  match func.exp_desc with
+  | Texp_ident (_, _, vd) ->
+    begin match uid_comp_unit vd.val_uid with
+    | None -> None
+    | Some comp_unit ->
+      begin match List.assoc_opt comp_unit ds_table with
+      | None -> None
+      | Some Immutable ->
+        if returns_the_structure comp_unit exp then Some Result
+        else None
+      end
+    end
+  | _ -> None
 
 (* This is our special mapper that changes pexp_applies where an event occurs*)
 let inject_mapper (wire_emit : Typedtree.primitive_description) =
@@ -216,16 +339,22 @@ let inject_mapper (wire_emit : Typedtree.primitive_description) =
   let inject_expression self (exp : Typedtree.expression) =
     let recurse_down : Typedtree.expression = super.expr self exp in
     match exp.exp_desc with
-    | Texp_apply (func, _) -> if filter_func func then
-      ({  exp_desc =
-            inject_then_run_node recurse_down ~emit:emit_node
-              ~inject:(emit_node exp.exp_env placeholder_record)
-        ; exp_loc = exp.exp_loc
-        ; exp_extra = exp.exp_extra
-        ; exp_type = exp.exp_type
-        ; exp_env = exp.exp_env
-        ; exp_attributes = exp.exp_attributes
-      } : Typedtree.expression) else recurse_down
+    | Texp_apply (func, _) ->
+      begin match classify exp func with
+      | None -> recurse_down
+      | Some Result ->
+        ({  exp_desc =
+              inject_then_run_node recurse_down ~emit:emit_node
+                ~inject:(emit_node exp.exp_env placeholder_record)
+                ~inject_after:
+                  (fun env -> emit_node env root_placeholder)
+          ; exp_loc = exp.exp_loc
+          ; exp_extra = exp.exp_extra
+          ; exp_type = exp.exp_type
+          ; exp_env = exp.exp_env
+          ; exp_attributes = exp.exp_attributes
+        } : Typedtree.expression)
+      end
     | _ -> recurse_down
   in
   {
