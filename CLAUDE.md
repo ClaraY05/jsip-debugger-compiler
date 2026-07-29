@@ -33,13 +33,14 @@ this list.** If you are grepping the whole tree, you are probably lost.
 |---|---|
 | `typing/vreplay_instrumentation.ml` / `.mli` | **The heart.** A `Tast_mapper` that rewrites every `Texp_apply` to emit instrumentation around the call. |
 | `driver/compile_common.ml:117` | The hookpoint — one line, pipes the typed AST through the mapper. |
-| `typing/snapshot.ml` / `.mli` | `external emit : string -> unit = "caml_wire_emit"` |
-| `runtime/snapshot.c` | Defines `caml_wire_emit`; currently just `fprintf`s to stdout. |
+| `parsing/snapshot.ml` / `.mli` | `external emit : string -> unit = "caml_wire_emit"`. **Nothing references it** — the mapper splices its own `external` into each instrumented unit. Kept deliberately; see `REVIEW_FINDINGS.md` #5. |
+| `runtime/snapshot.c` | Defines `caml_wire_emit`. Writes its argument to stdout **verbatim** and flushes — no prefix, no added newline. Framing is the OCaml side's job. |
 | `utils/clflags.ml:255`, `.mli:225` | `let visual_replay = ref false` |
 | `driver/main_args.ml:698` + 5 module lists | `-visual-replay` flag wiring. |
-| `Makefile:92`, `:174`, `:1251` | Build wiring for the above (see **Known broken** — `:92` is wrong). |
-| `vreplay/` | **Empty stubs.** `vreplay.ml`/`.c` are 0 bytes; `vreplay.mli` is prose pseudocode, not valid OCaml. Not currently built. |
+| `Makefile:92`, `:174`, `:1251` | Build wiring for the above. |
+| `vreplay/` | **Empty stubs.** `vreplay.ml`/`.c` are 0 bytes; `vreplay.mli` is prose pseudocode, **not valid OCaml** — and it *is* listed in the root `dune`, so `dune build` cannot succeed. Not built by `make`. |
 | `test_programs/map_test.ml` | Test input — **cannot be compiled by this tree** (see below). |
+| `REVIEW_FINDINGS.md` | Standing list of known bugs and open design decisions, with repros. Read it before starting on the wire format. |
 
 To see project work vs upstream for any path:
 
@@ -74,12 +75,26 @@ make -j 2 world        # if -j is too aggressive
 - Adding a new `.c` file to the runtime means adding its stem to
   `runtime_COMMON_C_SOURCES` (`Makefile:1251`).
 
-**Always confirm the build actually relinked** (see Known broken #1):
+**Always confirm the build actually relinked:**
 
 ```sh
 ls -la --time-style=full-iso ocamlc driver/compile_common.cmo
 # ocamlc must be NEWER than the .cmo, or your change is not in the binary
 ```
+
+**`make -j world` races on a from-scratch tree** (e.g. a fresh worktree). Once `LINKC
+ocamlc` starts, a concurrent job in `debugger/` or `ocamltest/` tries to run `./ocamlc`
+mid-link and dies with `the file './ocamlc' is not a bytecode executable file`,
+surfacing as `Error 127`. `-j 2` hits it too. It is transient, not a real failure —
+finish with a **serial `make world`**, which is fast at that point because everything up
+to `ocamlc` is already built. Incremental `-j` builds on an already-populated tree are
+fine.
+
+Also note `.depend` is tracked and currently **stale** (it still lists a
+`parsing/vreplay` module that moved to `typing/` in `a39aa82fb`). It is `include`d by
+the Makefile, so make remakes it whenever it looks out of date — in the main checkout
+even `make -n` was enough — and it then shows up modified in `git status`. That is
+expected, not your change. `make depend` and commit it once to be rid of it.
 
 ---
 
@@ -87,8 +102,35 @@ ls -la --time-style=full-iso ocamlc driver/compile_common.cmo
 
 ```sh
 ./ocamlc -visual-replay ./.tmp_files/tmp.ml    # writes ./a.out
-./a.out                                         # currently prints: {{}{}{}{}}
+./a.out
 ```
+
+`.tmp_files/tmp.ml` is the authors' scratch file and its contents change often, so it is
+a poor thing to check expected output against. For a stable smoke test use a snippet
+whose call count you know:
+
+```sh
+printf 'let g x = x + 1\nlet f x = x + 2\nlet () = ignore (f (g 1))\n' > /tmp/t.ml
+./ocamlc -visual-replay -o /tmp/t.out /tmp/t.ml && /tmp/t.out
+```
+
+Five applications execute — `ignore`, `f`, `g` and the two `+` — so the dump has five
+frames and must end at depth 0. One record per line, each prefixed by the frame markers
+giving its depth delta (`{` is +1, `}` is −1); the payload is still the literal `meow`:
+
+```
+{meow
+{meow
+{meow
+{meow
+}}{meow
+}}}
+```
+
+**All of that goes through `caml_wire_emit`**, markers included. Do not reintroduce
+`Printf.printf` for the markers: it writes into OCaml's stdout *channel* buffer, which
+is only flushed at exit, while `caml_wire_emit` flushes on every call — mixing the two
+put every marker in the run after every payload. See `REVIEW_FINDINGS.md` #2.
 
 No `-I` or stdlib flags needed — `./ocamlc -config` already points `standard_library` at
 `_install/lib/ocaml`, whose `stdlib.cmi` is identical to the one in `stdlib/`.
@@ -117,44 +159,77 @@ testsuite. `grep -rl 'vreplay\|wire_emit' testsuite/` returns nothing.
 
 ## Known broken — read this before debugging anything
 
-**1. `ocamlc` silently stops relinking.** `Makefile:91-92` puts `snapshot.mli
-snapshot.ml` inside `parsing_SOURCES`, which is wrapped in `$(addprefix parsing/, …)` —
-but there is no `parsing/snapshot.ml`; the files live at `typing/snapshot.{ml,mli}`.
-Confirm with:
+`REVIEW_FINDINGS.md` is the full list, with repros and status. The short version:
 
-```sh
-strings compilerlibs/ocamlcommon.cma | grep -c '^Snapshot$'   # 0 == broken
-```
+**1. An exception unbalances the dump.** The closing `}` is emitted as a *following*
+let-binding, so a call that raises never closes its frame. `dump_reader.ml` raises on a
+dump that doesn't return to depth 0, so any program using exceptions for control flow
+(`Not_found`, `Exit`, …) produces an unreadable dump. Reproduce with a `try ... with`
+around an instrumented call: the dump ends `{{{CAUGHT}`. The recommended fix is to carry
+depth as an explicit field and drop closing markers entirely — see `REVIEW_FINDINGS.md`
+#3, which also explains why re-raising from a `Texp_try` is the wrong first move (it
+corrupts the user program's backtraces).
 
-Contrast `Makefile:174`, which lists `vreplay_instrumentation.{mli,ml}` *without* a
-`typing/` prefix and is **fine** — `VPATH` (`Makefile:37`) includes `typing`. The
-`parsing/` case is not saved by VPATH because the prerequisite has an explicit directory
-component.
+**2. The sexp path is blocked.** `[@@deriving sexp]` and the commented-out
+`Sexplib.Sexp.to_string_hum` require ppx_sexp_conv / sexplib, which the **compiler build
+does not have and cannot easily get** — the compiler bootstraps against its own stdlib,
+not opam. Without ppx the attribute is *silently ignored*: there is no `sexp_of_t`
+(zero occurrences in the `.cmi`). This is why `print_call_node` is commented out and why
+injection hardcodes `placeholder_record = "meow\n"`. Solving it is the main blocker on
+the compiler side.
 
-**2. `wire_external` is not reachable from where it's used.** It is defined at
-`typing/vreplay_instrumentation.ml:11`, i.e. *inside* `module Wire`, but
-`inject_instrumentation` at the bottom of the file refers to it unqualified — and the
-`.mli` doesn't export it either. Any edit that splices it into the structure must
-qualify it as `Wire.wire_external` (or move it out of the module).
+Note `inject_then_run_node` takes `~inject` as an **arbitrary already-typed unit
+expression** and knows nothing about what it does — the real instrumentation will be a
+good deal more than one `caml_wire_emit` call (traversing argument values, allocating,
+several writes). Keep it that way; don't push string-payload assumptions back into it.
+It owns only the `{}` markers. Terminating a record with a newline is `~inject`'s job.
 
-**3. The sexp path is blocked.** `[@@deriving sexp]` (line 8) and
-`Sexplib.Sexp.to_string_hum` (line 86, currently commented out) require ppx_sexp_conv /
-sexplib, which the **compiler build does not have and cannot easily get** — the compiler
-bootstraps against its own stdlib, not opam. This is why `print_call_node` is commented
-out and why injection hardcodes a literal at line 191:
-`~inject:(call_c_node "meow")`. Solving this is the main blocker on the compiler side.
+**3. `filter_func` is a stub.** It returns `true` unconditionally, so *every* function
+application is instrumented, `+` and `^` included. The intended behavior is to fire only
+on data-structure creation/manipulation (see `vreplay/README.md`). Now that every marker
+is an unbuffered flushing write, this costs real time as well as noise.
 
-**4. `filter_func` is a stub.** `typing/vreplay_instrumentation.ml:180` returns `true`
-unconditionally, so *every* function application is instrumented. The intended behavior
-is to fire only on data-structure creation/manipulation (see `vreplay/README.md`).
-Likewise `let snapshot _x _y _z = _x` (line 51) is an identity-function placeholder.
-
-**5. The `-visual-replay` help text is mangled.** `driver/main_args.ml:698-700` has a
+**4. The `-visual-replay` help text is mangled.** `driver/main_args.ml:698-700` has a
 literal newline inside the string, so `./ocamlc -help` prints it across two lines.
 
-**6. `test_programs/map_test.ml` cannot be built here.** It opens `Base`, which exists
+**5. `-visual-replay` is a silent no-op in the toplevel.** The flag is registered in all
+four frontends, but `toplevel/` never goes through `compile_common` — it types phrases
+via `Typemod.type_toplevel_phrase` (`toplevel/topcommon.ml:210`). So `ocaml
+-visual-replay` accepts the flag and does nothing.
+
+**6. `dune build` cannot succeed.** `vreplay/vreplay.mli` is prose, not OCaml
+(`./ocamlc -stop-after parsing vreplay/vreplay.mli` → `Error: Syntax error`), and it is
+listed in the root `dune`. Conversely `vreplay_instrumentation` is in **no** dune file,
+so Merlin can't see the one file you actually edit. Since dune is only a Merlin helper
+here, that's backwards.
+
+**7. `test_programs/map_test.ml` cannot be built here.** It opens `Base`, which exists
 only in opam switches whose CMI magic (`Caml1999I578`) is incompatible with this
 compiler's (`Caml1999I038`). No Base/Core is vendored. Use `.tmp_files/tmp.ml` instead.
+It is also wired into no test runner and its `| Add a, p ->` pattern doesn't match its
+own `action` type.
+
+### Fixed — don't go looking for these
+
+Both of the long-standing build traps are gone as of `e6b9433cb`:
+
+- *`ocamlc` silently stops relinking.* `snapshot.{ml,mli}` moved to `parsing/`, so the
+  `$(addprefix parsing/, …)` in `parsing_SOURCES` (`Makefile:92`) is now correct.
+  **The check this file used to recommend gives a false negative:**
+  `strings compilerlibs/ocamlcommon.cma | grep -c '^Snapshot$'` still returns 0. Use
+  `./tools/ocamlobjinfo compilerlibs/ocamlcommon.cma | grep Snapshot` instead, which
+  reports `Unit name: Snapshot`.
+- *`wire_external` unreachable.* It now lives at the top level of
+  `vreplay_instrumentation.ml`, outside `module Wire`.
+
+Also verified working, so don't re-derive it: prepending the `Tstr_primitive` does
+**not** break module coercion when the unit has an `.mli` — tested with a module hiding
+a value, linked against a second unit.
+
+Note `parsing/snapshot.ml` is dead: nothing references `Snapshot.`, and what actually
+makes `caml_wire_emit` available to instrumented programs is `runtime/snapshot.c` being
+in `runtime_COMMON_C_SOURCES` (`Makefile:1251`), which puts the symbol in
+`runtime/primitives`. It is kept deliberately; see `REVIEW_FINDINGS.md` #5.
 
 ---
 
@@ -205,26 +280,36 @@ Getting there requires, in order:
    `Call.Info.t = { depth; function_info; location; arguments }`
    (`~/jsip-debugger-interface/lib/types/src/call.ml:3-10`). The interface has no sexp
    reader for this today.
-3. **Decide how depth is carried.** The current line format encodes it in `{`/`}` brace
-   deltas emitted by separate `Printf.printf` calls; a sexp record has no equivalent, so
-   depth must become an explicit field or stay as brace framing around each sexp.
+3. **Decide how depth is carried.** The line format encodes it in `{`/`}` deltas; a sexp
+   record has no equivalent, so depth must become an explicit field or stay as framing
+   around each sexp. **Recommendation: make it an explicit field.** That is also the fix
+   for the exception bug (Known broken #1) — if each record states its own depth, a dump
+   truncated by an unwind is still well formed, an unwind is just the next record's depth
+   jumping backwards, and there is nothing to emit on the raising path at all. See
+   `REVIEW_FINDINGS.md` #3.
 
 ### Mismatches to fix when you get there
 
-- `Wire.format_function_call` emits capitalized `"Function_name"` / `"Unnamed"`
-  (`typing/vreplay_instrumentation.ml:27-28`); the parser only accepts lowercase.
-- `runtime/snapshot.c:8` prefixes every line with `[wire] `, which no parser strips.
-  Either drop it or make it part of the documented framing.
-- Brackets are emitted via `Printf.printf` from injected OCaml while the payload goes
-  through the C stub — two different write paths into the same stream, easy to interleave
-  wrongly.
+- `Wire.format_function_call` emits capitalized `"Function_name"` / `"Unnamed"`; the
+  parser only accepts lowercase.
+- The payload is still the hardcoded literal `"meow"` — blocked on the sexp problem
+  above.
+
+Two mismatches that used to be listed here are **fixed**: `runtime/snapshot.c` no longer
+prefixes lines with `[wire] ` (it writes verbatim), and the markers no longer take a
+separate write path from the payload — everything goes through `caml_wire_emit`. The
+dump now lands on the shape `dump_reader.ml` already expects: marker prefix, then the
+payload, one record per line.
 
 ---
 
 ## Conventions
 
-**Style is enforced by `tools/check-typo`,** and every file this project added currently
-fails it. Before committing:
+**Style is enforced by `tools/check-typo`.** Every file this project added still fails
+it on `missing-header` — that one is an open attribution decision, not an oversight, and
+`REVIEW_FINDINGS.md` #14 explains why it hasn't just been copied from `typecore.ml`.
+Everything else (trailing whitespace, long lines, EOF newline) should be kept clean.
+Before committing:
 
 ```sh
 ./tools/check-typo-since trunk      # checks only changed files; instant
