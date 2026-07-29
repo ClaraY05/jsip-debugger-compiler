@@ -1,0 +1,357 @@
+[
+  structure_item (_none_[0,0+-1].._none_[0,0+-1]) ghost
+    Tstr_primitive
+    primitive_description __wire_emit/280 (_none_[0,0+-1].._none_[0,0+-1]) ghost
+      Tprim_decl
+        core_type (_none_[0,0+-1].._none_[0,0+-1]) ghost
+          Ttyp_arrow
+          Nolabel
+          core_type (_none_[0,0+-1].._none_[0,0+-1]) ghost
+            Ttyp_constr "string/17!"
+            []
+          core_type (_none_[0,0+-1].._none_[0,0+-1]) ghost
+            Ttyp_constr "unit/6!"
+            []
+        [
+          "caml_wire_emit"
+        ]
+  structure_item (./.tmp_files/tmp.ml[1,0+0].../.tmp_files/tmp.ml[4,140+44])
+    Tstr_eval
+    expression (./.tmp_files/tmp.ml[1,0+0].../.tmp_files/tmp.ml[4,140+44])
+      Texp_let Nonrec
+      [
+        <def>
+          pattern (./.tmp_files/tmp.ml[1,0+4].../.tmp_files/tmp.ml[1,0+19])
+            Tpat_var "generate_string/274"
+          expression (./.tmp_files/tmp.ml[1,0+20].../.tmp_files/tmp.ml[1,0+36]) ghost
+            Texp_function
+            [
+              Nolabel
+              Param_pat
+                pattern (./.tmp_files/tmp.ml[1,0+20].../.tmp_files/tmp.ml[1,0+21])
+                  Tpat_var "s/276"
+            ]
+            Tfunction_body
+              expression (./.tmp_files/tmp.ml[1,0+24].../.tmp_files/tmp.ml[1,0+36])
+                Texp_let Nonrec
+                [
+                  <def>
+                    pattern (./.tmp_files/tmp.ml[1,0+24].../.tmp_files/tmp.ml[1,0+36])
+                      Tpat_any
+                    expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                      Texp_apply
+                      expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                        Texp_ident "Stdlib!.Printf.printf"
+                      [
+                        <arg>
+                          Nolabel
+                          expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                            Texp_construct "CamlinternalFormatBasics.Format"
+                            [
+                              expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                Texp_construct "CamlinternalFormatBasics.Char_literal"
+                                [
+                                  expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                    Texp_constant Const_char 7b
+                                  expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                    Texp_construct "CamlinternalFormatBasics.End_of_format"
+                                    []
+                                ]
+                              expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                Texp_constant Const_string("{",(_none_[0,0+-1].._none_[0,0+-1]) ghost,None)
+                            ]
+                      ]
+                ]
+                expression (./.tmp_files/tmp.ml[1,0+24].../.tmp_files/tmp.ml[1,0+36])
+                  Texp_let Nonrec
+                  [
+                    <def>
+                      pattern (./.tmp_files/tmp.ml[1,0+24].../.tmp_files/tmp.ml[1,0+36])
+                        Tpat_any
+                      expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                        Texp_apply
+                        expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                          Texp_ident "__wire_emit/280"
+                        [
+                          <arg>
+                            Nolabel
+                            expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                              Texp_constant Const_string("meow",(_none_[0,0+-1].._none_[0,0+-1]) ghost,None)
+                        ]
+                  ]
+                  expression (./.tmp_files/tmp.ml[1,0+24].../.tmp_files/tmp.ml[1,0+36])
+                    Texp_let Nonrec
+                    [
+                      <def>
+                        pattern (./.tmp_files/tmp.ml[1,0+24].../.tmp_files/tmp.ml[1,0+36])
+                          Tpat_var "res/281"
+                        expression (./.tmp_files/tmp.ml[1,0+24].../.tmp_files/tmp.ml[1,0+36])
+                          Texp_apply
+                          expression (./.tmp_files/tmp.ml[1,0+33].../.tmp_files/tmp.ml[1,0+34])
+                            Texp_ident "Stdlib!.^"
+                          [
+                            <arg>
+                              Nolabel
+                              expression (./.tmp_files/tmp.ml[1,0+24].../.tmp_files/tmp.ml[1,0+32])
+                                Texp_constant Const_string("hello ",(./.tmp_files/tmp.ml[1,0+25].../.tmp_files/tmp.ml[1,0+31]),None)
+                            <arg>
+                              Nolabel
+                              expression (./.tmp_files/tmp.ml[1,0+35].../.tmp_files/tmp.ml[1,0+36])
+                                Texp_ident "s/276"
+                          ]
+                    ]
+                    expression (./.tmp_files/tmp.ml[1,0+24].../.tmp_files/tmp.ml[1,0+36])
+                      Texp_let Nonrec
+                      [
+                        <def>
+                          pattern (./.tmp_files/tmp.ml[1,0+24].../.tmp_files/tmp.ml[1,0+36])
+                            Tpat_any
+                          expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                            Texp_apply
+                            expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                              Texp_ident "Stdlib!.Printf.printf"
+                            [
+                              <arg>
+                                Nolabel
+                                expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                  Texp_construct "CamlinternalFormatBasics.Format"
+                                  [
+                                    expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                      Texp_construct "CamlinternalFormatBasics.Char_literal"
+                                      [
+                                        expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                          Texp_constant Const_char 7d
+                                        expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                          Texp_construct "CamlinternalFormatBasics.End_of_format"
+                                          []
+                                      ]
+                                    expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                      Texp_constant Const_string("}",(_none_[0,0+-1].._none_[0,0+-1]) ghost,None)
+                                  ]
+                            ]
+                      ]
+                      expression (./.tmp_files/tmp.ml[1,0+24].../.tmp_files/tmp.ml[1,0+36])
+                        Texp_ident "res/281"
+      ]
+      expression (./.tmp_files/tmp.ml[2,40+0].../.tmp_files/tmp.ml[4,140+44])
+        Texp_let Nonrec
+        [
+          <def>
+            pattern (./.tmp_files/tmp.ml[2,40+4].../.tmp_files/tmp.ml[2,40+20])
+              Tpat_var "generate_string2/277"
+            expression (./.tmp_files/tmp.ml[2,40+21].../.tmp_files/tmp.ml[2,40+34]) ghost
+              Texp_function
+              [
+                Nolabel
+                Param_pat
+                  pattern (./.tmp_files/tmp.ml[2,40+21].../.tmp_files/tmp.ml[2,40+22])
+                    Tpat_var "s/279"
+              ]
+              Tfunction_body
+                expression (./.tmp_files/tmp.ml[2,40+25].../.tmp_files/tmp.ml[2,40+34])
+                  Texp_let Nonrec
+                  [
+                    <def>
+                      pattern (./.tmp_files/tmp.ml[2,40+25].../.tmp_files/tmp.ml[2,40+34])
+                        Tpat_any
+                      expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                        Texp_apply
+                        expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                          Texp_ident "Stdlib!.Printf.printf"
+                        [
+                          <arg>
+                            Nolabel
+                            expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                              Texp_construct "CamlinternalFormatBasics.Format"
+                              [
+                                expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                  Texp_construct "CamlinternalFormatBasics.Char_literal"
+                                  [
+                                    expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                      Texp_constant Const_char 7b
+                                    expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                      Texp_construct "CamlinternalFormatBasics.End_of_format"
+                                      []
+                                  ]
+                                expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                  Texp_constant Const_string("{",(_none_[0,0+-1].._none_[0,0+-1]) ghost,None)
+                              ]
+                        ]
+                  ]
+                  expression (./.tmp_files/tmp.ml[2,40+25].../.tmp_files/tmp.ml[2,40+34])
+                    Texp_let Nonrec
+                    [
+                      <def>
+                        pattern (./.tmp_files/tmp.ml[2,40+25].../.tmp_files/tmp.ml[2,40+34])
+                          Tpat_any
+                        expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                          Texp_apply
+                          expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                            Texp_ident "__wire_emit/280"
+                          [
+                            <arg>
+                              Nolabel
+                              expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                Texp_constant Const_string("meow",(_none_[0,0+-1].._none_[0,0+-1]) ghost,None)
+                          ]
+                    ]
+                    expression (./.tmp_files/tmp.ml[2,40+25].../.tmp_files/tmp.ml[2,40+34])
+                      Texp_let Nonrec
+                      [
+                        <def>
+                          pattern (./.tmp_files/tmp.ml[2,40+25].../.tmp_files/tmp.ml[2,40+34])
+                            Tpat_var "res/326"
+                          expression (./.tmp_files/tmp.ml[2,40+25].../.tmp_files/tmp.ml[2,40+34])
+                            Texp_apply
+                            expression (./.tmp_files/tmp.ml[2,40+31].../.tmp_files/tmp.ml[2,40+32])
+                              Texp_ident "Stdlib!.^"
+                            [
+                              <arg>
+                                Nolabel
+                                expression (./.tmp_files/tmp.ml[2,40+25].../.tmp_files/tmp.ml[2,40+30])
+                                  Texp_constant Const_string("hi ",(./.tmp_files/tmp.ml[2,40+26].../.tmp_files/tmp.ml[2,40+29]),None)
+                              <arg>
+                                Nolabel
+                                expression (./.tmp_files/tmp.ml[2,40+33].../.tmp_files/tmp.ml[2,40+34])
+                                  Texp_ident "s/279"
+                            ]
+                      ]
+                      expression (./.tmp_files/tmp.ml[2,40+25].../.tmp_files/tmp.ml[2,40+34])
+                        Texp_let Nonrec
+                        [
+                          <def>
+                            pattern (./.tmp_files/tmp.ml[2,40+25].../.tmp_files/tmp.ml[2,40+34])
+                              Tpat_any
+                            expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                              Texp_apply
+                              expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                Texp_ident "Stdlib!.Printf.printf"
+                              [
+                                <arg>
+                                  Nolabel
+                                  expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                    Texp_construct "CamlinternalFormatBasics.Format"
+                                    [
+                                      expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                        Texp_construct "CamlinternalFormatBasics.Char_literal"
+                                        [
+                                          expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                            Texp_constant Const_char 7d
+                                          expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                            Texp_construct "CamlinternalFormatBasics.End_of_format"
+                                            []
+                                        ]
+                                      expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                        Texp_constant Const_string("}",(_none_[0,0+-1].._none_[0,0+-1]) ghost,None)
+                                    ]
+                              ]
+                        ]
+                        expression (./.tmp_files/tmp.ml[2,40+25].../.tmp_files/tmp.ml[2,40+34])
+                          Texp_ident "res/326"
+        ]
+        expression (./.tmp_files/tmp.ml[4,140+0].../.tmp_files/tmp.ml[4,140+44])
+          Texp_let Nonrec
+          [
+            <def>
+              pattern (./.tmp_files/tmp.ml[4,140+0].../.tmp_files/tmp.ml[4,140+44])
+                Tpat_any
+              expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                Texp_apply
+                expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                  Texp_ident "Stdlib!.Printf.printf"
+                [
+                  <arg>
+                    Nolabel
+                    expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                      Texp_construct "CamlinternalFormatBasics.Format"
+                      [
+                        expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                          Texp_construct "CamlinternalFormatBasics.Char_literal"
+                          [
+                            expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                              Texp_constant Const_char 7b
+                            expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                              Texp_construct "CamlinternalFormatBasics.End_of_format"
+                              []
+                          ]
+                        expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                          Texp_constant Const_string("{",(_none_[0,0+-1].._none_[0,0+-1]) ghost,None)
+                      ]
+                ]
+          ]
+          expression (./.tmp_files/tmp.ml[4,140+0].../.tmp_files/tmp.ml[4,140+44])
+            Texp_let Nonrec
+            [
+              <def>
+                pattern (./.tmp_files/tmp.ml[4,140+0].../.tmp_files/tmp.ml[4,140+44])
+                  Tpat_any
+                expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                  Texp_apply
+                  expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                    Texp_ident "__wire_emit/280"
+                  [
+                    <arg>
+                      Nolabel
+                      expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                        Texp_constant Const_string("meow",(_none_[0,0+-1].._none_[0,0+-1]) ghost,None)
+                  ]
+            ]
+            expression (./.tmp_files/tmp.ml[4,140+0].../.tmp_files/tmp.ml[4,140+44])
+              Texp_let Nonrec
+              [
+                <def>
+                  pattern (./.tmp_files/tmp.ml[4,140+0].../.tmp_files/tmp.ml[4,140+44])
+                    Tpat_var "res/328"
+                  expression (./.tmp_files/tmp.ml[4,140+0].../.tmp_files/tmp.ml[4,140+44])
+                    Texp_apply
+                    expression (./.tmp_files/tmp.ml[4,140+1].../.tmp_files/tmp.ml[4,140+17])
+                      Texp_ident "generate_string2/277"
+                    [
+                      <arg>
+                        Nolabel
+                        expression (./.tmp_files/tmp.ml[4,140+18].../.tmp_files/tmp.ml[4,140+43])
+                          Texp_apply
+                          expression (./.tmp_files/tmp.ml[4,140+19].../.tmp_files/tmp.ml[4,140+34])
+                            Texp_ident "generate_string/274"
+                          [
+                            <arg>
+                              Nolabel
+                              expression (./.tmp_files/tmp.ml[4,140+35].../.tmp_files/tmp.ml[4,140+42])
+                                Texp_constant Const_string("robyn",(./.tmp_files/tmp.ml[4,140+36].../.tmp_files/tmp.ml[4,140+41]),None)
+                          ]
+                    ]
+              ]
+              expression (./.tmp_files/tmp.ml[4,140+0].../.tmp_files/tmp.ml[4,140+44])
+                Texp_let Nonrec
+                [
+                  <def>
+                    pattern (./.tmp_files/tmp.ml[4,140+0].../.tmp_files/tmp.ml[4,140+44])
+                      Tpat_any
+                    expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                      Texp_apply
+                      expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                        Texp_ident "Stdlib!.Printf.printf"
+                      [
+                        <arg>
+                          Nolabel
+                          expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                            Texp_construct "CamlinternalFormatBasics.Format"
+                            [
+                              expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                Texp_construct "CamlinternalFormatBasics.Char_literal"
+                                [
+                                  expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                    Texp_constant Const_char 7d
+                                  expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                    Texp_construct "CamlinternalFormatBasics.End_of_format"
+                                    []
+                                ]
+                              expression (_none_[0,0+-1].._none_[0,0+-1]) ghost
+                                Texp_constant Const_string("}",(_none_[0,0+-1].._none_[0,0+-1]) ghost,None)
+                            ]
+                      ]
+                ]
+                expression (./.tmp_files/tmp.ml[4,140+0].../.tmp_files/tmp.ml[4,140+44])
+                  Texp_ident "res/328"
+]
+
