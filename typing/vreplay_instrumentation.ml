@@ -20,11 +20,9 @@ module Wire = struct
           (Untypeast.untype_expression func)
     in
     let argument_list =
-      (* the second component of each pair is the argument itself.
-         [Texp_apply] carries an [apply_arg], which is [Omitted] for an
-         argument the application is abstracted over -- that happens for a
-         labelled partial application, where there is no expression to
-         print. *)
+      (* [Texp_apply] hands us an [apply_arg], not an expression: it's
+         [Omitted] for an argument the application is abstracted over, i.e. a
+         labelled partial application *)
       let format_arg (arg_label, arg) =
         let argument_data =
           match (arg : Typedtree.apply_arg) with
@@ -71,27 +69,16 @@ let call_c_node input =
  Ast_helper.Exp.apply callc_function [ (Nolabel, callc_arg) ]
 ;;
 
-(* Frame markers. The reader reconstructs call nesting from the running sum of
-   these ([frame_open] is +1, [frame_close] is -1) and expects them to prefix
-   the record they belong to, so they have to reach the dump in the same order
-   the calls happened.
-
-   That is why they go through [caml_wire_emit] like the record does rather
-   than through [Printf.printf]: [Printf.printf] writes into OCaml's stdout
-   channel buffer, which is only flushed when the program exits, while
-   [caml_wire_emit] writes to the C [stdout] and flushes on every call. Mixing
-   the two meant every marker in the run arrived after every record.
-
-   These are the only bytes this module puts on the wire itself. Terminating
-   the record is the injected instrumentation's job, not ours -- see
-   [inject_then_run_node]. *)
+(* frame markers: the reader sums these to get call depth ({ is +1, } is -1),
+   so they have to reach the dump in call order. emit them with
+   [caml_wire_emit], not [Printf.printf] -- printf buffers in OCaml's stdout
+   channel and only flushes at exit, so mixing the two put every marker in the
+   run after every record. *)
 let frame_open = "{"
 let frame_close = "}"
 
-(* Stand-in for the real record until the serialization problem is solved (see
-   [Wire.format_function_call], which cannot be used yet because there is no
-   sexp printer). Note the trailing newline: whatever replaces this has to
-   terminate its own record. *)
+(* stand-in until we can serialize a real record. note the trailing newline --
+   whatever replaces this has to terminate its own record *)
 let placeholder_record = "meow\n"
 
 (* makes an expression by passing down parent fields for all but env, desc,
@@ -105,27 +92,14 @@ let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
   ; exp_env
   ; exp_attributes=parent.exp_attributes}
 
-(* wrapper to run [exp] after doing some instrumentation [inject], along with
+(* wrapper to run [exp] after doing some instrumentation [inject] along with
    enclosing frame markers. exp should be a Texp_apply to type check. *)
 (* This returns an exp_desc, not an actual exp. *)
-(* [inject] is an arbitrary already-typed expression, and this function
-   deliberately knows nothing about what it does. Today it happens to be a
-   single [caml_wire_emit] call, but it is meant to grow into whatever walking
-   and dumping a data structure takes -- several calls, allocation, traversal
-   of the argument values -- so nothing here should assume it is one string.
-   Emitting the record and terminating it (with a newline, so the frame markers
-   of the next record start a fresh line) is [inject]'s job; this function owns
-   only the markers on either side.
-
-   It does not have to be [unit] either. It is bound with [Tpat_any] purely to
-   sequence it before the call, and the binding takes its type from
-   [inject.exp_type], so the value is discarded whatever it is. Constraining it
-   to [unit] would only force the caller to build an [ignore] wrapper it does
-   not need.
-
-   [emit] builds an already-typed unit expression that pushes its argument
-   through [caml_wire_emit]. It has to be passed in because only the caller has
-   an environment carrying the spliced-in [wire_emit_name] primitive. *)
+(* [inject] is any already-typed expression -- we deliberately don't care what
+   it does or what type it has, since the real instrumentation will be a lot
+   more than one emit. it writes the record and terminates it; we own only the
+   markers either side. [emit] is passed in because only the caller's env has
+   [wire_emit_name] in scope. *)
 let inject_then_run_node (exp : Typedtree.expression)
       ~(emit : Env.t -> string -> Typedtree.expression)
       ~(inject : Typedtree.expression) =
@@ -157,15 +131,10 @@ let inject_then_run_node (exp : Typedtree.expression)
   ; vb_attributes=exp.exp_attributes
   ; vb_loc=exp.exp_loc
   }], mk_exp exp exp.exp_env exp.exp_type
-  (* Then, run our instrumentation. Whatever it writes is this record; the
-     markers emitted before it are what the reader turns into the record's
-     depth delta.
-
-     The pattern takes its type from [inject] rather than asserting
-     [Predef.type_unit], so the instrumentation is free to have whatever type
-     it ends up with -- see the note on [~inject] above. Its value is
-     discarded either way: [Matching.for_let] compiles a [Tpat_any] binding to
-     a plain [Lsequence] and never looks at [pat_type]. *)
+  (* Then, run our instrumentation. pat_type comes from [inject] rather than
+     [Predef.type_unit] so it isn't forced to be unit -- the value is dropped
+     either way, since [Matching.for_let] turns a [Tpat_any] binding into an
+     [Lsequence] without ever reading pat_type. *)
   (Typedtree.Texp_let (Asttypes.Nonrecursive,
   [{
     vb_pat=
