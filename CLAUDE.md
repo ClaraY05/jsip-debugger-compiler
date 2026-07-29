@@ -285,8 +285,9 @@ Reference fixture: `~/jsip-debugger-interface/app/bin/dummy.txt`.
 
 ### Where this is going
 
-**Sexp is the intended direction.** `typing/vreplay_instrumentation.ml:2-8` defines the
-target record:
+**Sexp is the intended direction.** The target record (formerly `module Wire` in
+`vreplay_instrumentation.ml`, deleted as dead code — recover its formatter from git
+history when serialization unblocks):
 
 ```ocaml
 type t =
@@ -294,7 +295,6 @@ type t =
   ; function_type   : string
   ; function_data   : string
   ; argument_list   : (string * string) list }
-[@@deriving sexp]
 ```
 
 Getting there requires, in order:
@@ -316,8 +316,8 @@ Getting there requires, in order:
 
 ### Mismatches to fix when you get there
 
-- `Wire.format_function_call` emits capitalized `"Function_name"` / `"Unnamed"`; the
-  parser only accepts lowercase.
+- The parser only accepts lowercase tags (`function_name` / `unnamed`); the deleted
+  `Wire` formatter emitted capitalized ones — don't copy that back from history.
 - The payload is still the hardcoded literal `"meow"` — blocked on the sexp problem
   above.
 

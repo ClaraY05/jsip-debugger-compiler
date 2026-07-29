@@ -174,20 +174,18 @@ declaration into each unit it instruments, so the feature does not read
 `Snapshot.emit`. Keeping the module is fine; just don't rely on it being what
 registers the primitive.
 
-### 6. `[@@deriving sexp]` is a silent no-op — **open**
+### 6. `[@@deriving sexp]` is a silent no-op — **fixed**
 
-`vreplay_instrumentation.ml` and its `.mli`. Without ppx_sexp_conv the
-attribute is simply ignored — there is no `sexp_of_t` (zero occurrences in the
-`.cmi`). It reads as though serialization exists. Either drop it until the
-hand-written s-expression printer lands, or replace it with an explicit
-`val to_string : t -> string` so the gap is visible.
+Gone with `module Wire` (see #7). Whatever serializer eventually lands must
+not reintroduce the attribute — without ppx_sexp_conv it is silently
+ignored, which is how it read as though serialization existed.
 
-### 7. `module Wire` is exported but unused — **open**
+### 7. `module Wire` is exported but unused — **fixed**
 
-`format_function_call` has no callers; `print_call_node` is still commented
-out. The only cross-module reference to this file anywhere in the tree is
-`compile_common.ml:117`. Fixing #4 makes `Wire` *correct*, not *live* — the
-payload is still the literal `"meow"`.
+Deleted as dead code: `format_function_call` never gained a caller and the
+record only ever documented the target shape, which CLAUDE.md's wire-format
+section still does. Recover the formatter from git history when
+serialization unblocks — minus its capitalized tags (see #13).
 
 ### 8. `vreplay/` breaks the dune build — **open**
 
@@ -269,10 +267,12 @@ re-observe an existing structure.
 
 ### 13. Wire-format mismatches with the interface — **open**
 
-- `format_function_call` emits capitalized `"Function_name"` / `"Unnamed"`;
-  `dump_reader.ml` only accepts lowercase.
-- The payload is still the hardcoded literal `"meow"` — `print_call_node` is
-  blocked on #6.
+- The payload is still the hardcoded literal `"meow"` — real serialization
+  is blocked on the no-sexplib problem (CLAUDE.md, "The sexp path is
+  blocked").
+- For whoever writes the serializer: `dump_reader.ml` only accepts lowercase
+  tags (`function_name` / `unnamed`); the deleted `Wire` formatter emitted
+  capitalized ones — don't copy that detail back from history.
 
 ---
 
