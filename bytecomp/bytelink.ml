@@ -944,6 +944,18 @@ let link objfiles output_name =
     | false, true, false -> "stdlib.cma" :: objfiles
     | _                  -> "stdlib.cma" :: objfiles @ ["std_exit.cmo"]
   in
+  (* Under -visual-replay the instrumentation injects calls to [Vreplay.snapshot]
+     into the program, so its runtime library must be linked in.  It depends on
+     the stdlib, so it goes right after [stdlib.cma] and before the user's
+     modules.  [vreplay.cma] is resolved on the load path (see Compmisc, which
+     adds "+vreplay" under the same flag). *)
+  let objfiles =
+    if !Clflags.visual_replay then
+      match objfiles with
+      | "stdlib.cma" :: rest -> "stdlib.cma" :: "vreplay.cma" :: rest
+      | other -> "vreplay.cma" :: other
+    else objfiles
+  in
   let ldeps = Linkdeps.create ~complete:true in
   let tolink = List.fold_right (scan_file ldeps) objfiles [] in
   (match Linkdeps.check ldeps with
