@@ -6,6 +6,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <errno.h>
+#include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#endif
 
 /* ------------------------------------------------------------------ *
  * Visual-replay heap snapshot walker.
@@ -503,28 +512,94 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
 }
 
 /* ------------------------------------------------------------------ *
- * Frame markers.  The instrumentation brackets every event with "{" / "}"
+ * The dump sink.  The instrumentation brackets every event with "{" / "}"
  * via [__wire_emit] (see typing/vreplay_instrumentation.ml); the reader sums
- * them to recover call depth.
+ * them to recover call depth.  Everything -- markers and records -- goes
+ * through the one sink, chosen once at the first emit:
  *
- * Writes [msg] verbatim -- no prefix, no newline -- since framing is the
- * caller's job and a record's {} markers must land on the same line as the
- * record.  Flushed every call so the dump stays in order.
+ *   VREPLAY_SOCK=<path>   connect a Unix domain stream socket (a live
+ *                         listener, e.g. the debugger interface); if the
+ *                         connect fails, warn on stderr and fall through
+ *   VREPLAY_FILE=<path>   write that file (truncating)
+ *   neither               write ./vreplay.dump
  *
- * Keep msg in an argument position, never the format position: records may be
- * printed source text containing '%'.  This also stops at the first NUL, so a
- * record must not contain one.
+ * Never stdout: the dump must not interleave with the program's own
+ * prints (they'd corrupt the stream for the reader).  Writes are raw
+ * [write]/[send] full-write loops, verbatim -- no prefix, no newline
+ * (framing is the caller's job) -- and unbuffered, so the dump stays
+ * ordered without flushing.  Socket writes use MSG_NOSIGNAL so a
+ * vanished listener surfaces as EPIPE instead of SIGPIPE killing the
+ * program; any write error (or failure to open a sink at all) warns
+ * once on stderr and disables emission rather than take the program
+ * down with it.
  * ------------------------------------------------------------------ */
-static void my_existing_function(const char *msg)
+static int wire_fd = -2;               /* -2 not yet chosen, -1 disabled */
+static int wire_fd_is_socket = 0;
+
+static void wire_disable(const char *what, const char *detail)
 {
-    fprintf(stdout, "%s", msg);
-    fflush(stdout);
+    fprintf(stderr, "vreplay: %s %s (%s); dump disabled\n",
+            what, detail, strerror(errno));
+    wire_fd = -1;
+}
+
+static void wire_open_sink(void)
+{
+#ifndef _WIN32
+    const char *sock = getenv("VREPLAY_SOCK");
+    if (sock != NULL) {
+        struct sockaddr_un addr;
+        if (strlen(sock) < sizeof(addr.sun_path)) {
+            int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+            memset(&addr, 0, sizeof(addr));
+            addr.sun_family = AF_UNIX;
+            strcpy(addr.sun_path, sock);
+            if (fd >= 0
+                && connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+                wire_fd = fd;
+                wire_fd_is_socket = 1;
+                return;
+            }
+            if (fd >= 0) close(fd);
+        } else
+            errno = ENAMETOOLONG;
+        fprintf(stderr,
+                "vreplay: cannot connect VREPLAY_SOCK %s (%s); "
+                "falling back to a file\n",
+                sock, strerror(errno));
+    }
+#endif
+    const char *path = getenv("VREPLAY_FILE");
+    if (path == NULL) path = "vreplay.dump";
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) { wire_disable("cannot open", path); return; }
+    wire_fd = fd;
+}
+
+static void wire_write(const char *buf, size_t len)
+{
+    if (wire_fd == -2) wire_open_sink();
+    while (wire_fd >= 0 && len > 0) {
+        ssize_t n;
+#ifndef _WIN32
+        if (wire_fd_is_socket) n = send(wire_fd, buf, len, MSG_NOSIGNAL);
+        else
+#endif
+            n = write(wire_fd, buf, len);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            wire_disable("write failed on", "the dump sink");
+            return;
+        }
+        buf += n;
+        len -= (size_t)n;
+    }
 }
 
 /* external __wire_emit : string -> unit = "caml_wire_emit" */
 CAMLprim value caml_wire_emit(value v_msg)
 {
     CAMLparam1(v_msg);
-    my_existing_function(String_val(v_msg));
+    wire_write(String_val(v_msg), caml_string_length(v_msg));
     CAMLreturn(Val_unit);
 }
