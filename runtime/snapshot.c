@@ -28,7 +28,8 @@
  *   type node  = { virtual_address : nativeint
  *                ; block : (string * block) list; children : node list }
  *   external traverse :
- *     Obj.t -> (Obj.t * int) array -> string array -> int
+ *     Obj.t -> (Obj.t * int) array
+ *     -> (string array * int * int * bool) array
  *     -> node * (int * nativeint) array
  *     = "caml_wire_traverse"
  * The DS type itself stays on the OCaml side ([Vreplay.t] pairs it with
@@ -38,13 +39,27 @@
  * are exactly the ones the nodes record: an (Id i) boundary in the
  * snapshot is resolved by indexing this event's registry.
  *
- * Given a [root] to walk, [known] (every currently-tracked
- * object paired with its stable id, from the weak registry), and the DS's
- * field [labels] + [mask] (which fields carry meaningful information: the
- * child pointers and the key/value positions), we BFS the in-memory
- * representation reachable from [root] and return it as a tree of [node]s,
- * each node pointing at its children.  Unmasked fields are dropped.  A
- * masked field becomes, per the rule:
+ * Given a [root] to walk, [known] (every currently-tracked object paired
+ * with its stable id, from the weak registry), and the DS's [layers]
+ * (one flattened Data_structure.layer per entry: labels, interior mask,
+ * payload mask, is_array -- see data_structure.mli), we BFS the
+ * in-memory representation reachable from [root] and return it as a
+ * tree of [node]s, each node pointing at its children.
+ *
+ * Every BFS entry carries a MODE: interior (an index into [layers]) or
+ * payload (user data).  The root starts at layer 0.  In an interior
+ * cell, the layer's masks decide each field: interior fields step one
+ * layer deeper (clamped to the last -- chains repeat it), payload
+ * fields switch to payload mode, unmarked fields (bookkeeping) are
+ * dropped.  An interior Fixed layer must match the cell's size exactly;
+ * on a mismatch (our expectation diverged from the actual
+ * representation) the cell is demoted to payload treatment rather than
+ * truncated or mislabeled.  In a payload cell, EVERY field is kept,
+ * labels are numeric, and children stay payload: user data is never
+ * filtered by DS masks, whatever its arity.  A block's mode is fixed by
+ * the first edge that discovers it.
+ *
+ * A kept field becomes, per the rule:
  *
  *   - not a block            -> Int (unboxed int/char/bool/constant ctor)
  *   - block, in [known]      -> Id (its registry id), STOP -- it is
@@ -89,6 +104,19 @@ static void vec_push(vec *v, value x)
     if (v->len == v->cap) {
         v->cap = v->cap ? v->cap * 2 : 16;
         v->data = realloc(v->data, v->cap * sizeof(value));
+    }
+    v->data[v->len++] = x;
+}
+
+/* ---- growable array of longs: each BFS entry's mode, parallel to the
+ * value queue (a layer index, or MODE_PAYLOAD) ---- */
+typedef struct { long *data; size_t len, cap; } lvec;
+
+static void lvec_push(lvec *v, long x)
+{
+    if (v->len == v->cap) {
+        v->cap = v->cap ? v->cap * 2 : 16;
+        v->data = realloc(v->data, v->cap * sizeof(long));
     }
     v->data[v->len++] = x;
 }
@@ -168,16 +196,55 @@ static long known_lookup(const known_ent *arr, size_t n, uintnat p)
     return -1;
 }
 
-/* Label for field [i]: the DS labels when this cell's size matches the label
- * count (i.e. it IS the DS's internal node), else the field index -- masked
- * value positions can lead into other block shapes (lists, tuples) whose
- * fields the DS labels don't describe.  Copied to C during the walk so the
- * result build can't be reading a string the GC just moved. */
-static char *label_for(value v_labels, mlsize_t nlabels, mlsize_t cell_size,
-                       mlsize_t i)
+/* ---- the DS layout, copied to C up front ----
+ * Labels are strdup'd before the walk so nothing here can be reading a
+ * string the GC later moves, and the walk itself stays allocation-free. */
+typedef struct {
+    char   **labels;     /* owned; nlabels entries */
+    mlsize_t nlabels;
+    uintnat  interior;   /* bitmask: fields one layer deeper */
+    uintnat  payload;    /* bitmask: user-data fields */
+    int      is_array;   /* variable size, every element interior */
+} clayer;
+
+#define MODE_PAYLOAD (-1L)
+
+static clayer *layers_of_value(value v_layers, mlsize_t *out_n)
 {
-    if (cell_size == nlabels && i < nlabels)
-        return strdup(String_val(Field(v_labels, i)));
+    mlsize_t n = Wosize_val(v_layers);
+    clayer *ls = n ? malloc(sizeof(clayer) * n) : NULL;
+    for (mlsize_t k = 0; k < n; k++) {
+        value tup = Field(v_layers, k);
+        value v_labels = Field(tup, 0);
+        ls[k].nlabels = Wosize_val(v_labels);
+        ls[k].labels =
+            ls[k].nlabels ? malloc(sizeof(char *) * ls[k].nlabels) : NULL;
+        for (mlsize_t i = 0; i < ls[k].nlabels; i++)
+            ls[k].labels[i] = strdup(String_val(Field(v_labels, i)));
+        ls[k].interior = (uintnat)Long_val(Field(tup, 1));
+        ls[k].payload  = (uintnat)Long_val(Field(tup, 2));
+        ls[k].is_array = Bool_val(Field(tup, 3));
+    }
+    *out_n = n;
+    return ls;
+}
+
+static void layers_free(clayer *ls, mlsize_t n)
+{
+    for (mlsize_t k = 0; k < n; k++) {
+        for (mlsize_t i = 0; i < ls[k].nlabels; i++)
+            free(ls[k].labels[i]);
+        free(ls[k].labels);
+    }
+    free(ls);
+}
+
+/* Label for kept field [i]: the layer's label in a size-matched interior
+ * Fixed cell, the field index everywhere else (payload cells, arrays). */
+static char *field_label(const clayer *ly, mlsize_t i)
+{
+    if (ly != NULL && !ly->is_array && i < ly->nlabels)
+        return strdup(ly->labels[i]);
     else {
         char buf[32];
         snprintf(buf, sizeof buf, "%lu", (unsigned long)i);
@@ -334,18 +401,15 @@ static value alloc_block(const cfield *fl)
 }
 
 /* external traverse :
- *   Obj.t -> (Obj.t * int) array -> string array -> int
+ *   Obj.t -> (Obj.t * int) array -> (string array * int * int * bool) array
  *   -> node * (int * nativeint) array
  *   = "caml_wire_traverse" */
 CAMLprim value caml_wire_traverse(value v_root, value v_known,
-                                  value v_labels, value v_mask)
+                                  value v_layers)
 {
-    CAMLparam4(v_root, v_known, v_labels, v_mask);
+    CAMLparam3(v_root, v_known, v_layers);
     CAMLlocal5(nodes, nodev, lst, ent, bx);
     CAMLlocal3(cons, regarr, resv);
-
-    uintnat mask = (uintnat)Long_val(v_mask);
-    mlsize_t nlabels = Wosize_val(v_labels);
 
     /* Build the sorted pointer->id table from [known].  Reads raw pointers of
      * the known objects; no allocation, so they can't move.  [reg] keeps an
@@ -389,16 +453,22 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
         CAMLreturn(resv);
     }
 
-    /* ---- phase 1: BFS, no OCaml allocation ---- */
+    /* ---- phase 1: BFS, no OCaml allocation (the layer copy strdups,
+     * which is C allocation only) ---- */
+    mlsize_t nlayers = 0;
+    clayer *layers = layers_of_value(v_layers, &nlayers);
     vec seen = {0};
+    lvec modes = {0};
     itab seen_tab = {0};
     ccell *cells = NULL;
     size_t ncells = 0, ccap = 0;
 
-    vec_push(&seen, v_root);   /* root is cell 0 */
+    vec_push(&seen, v_root);   /* root is cell 0, at the first layer */
+    lvec_push(&modes, nlayers ? 0 : MODE_PAYLOAD);
     itab_put(&seen_tab, (uintnat)v_root, 0);
     for (size_t head = 0; head < seen.len; head++) {
         value v = seen.data[head];
+        long mode = modes.data[head];
         ccell c;
         c.addr = (uintnat)v;
         c.fields = NULL;
@@ -406,13 +476,43 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
 
         if (Walkable_tag(Tag_val(v))) {
             mlsize_t n = Wosize_val(v);
+            const clayer *ly = NULL;
+            int payload_cell = (mode == MODE_PAYLOAD);
+            if (!payload_cell) {
+                ly = &layers[mode];
+                if (!ly->is_array && n != ly->nlabels) {
+                    /* the representation didn't match the layer we
+                     * expected here: demote to payload treatment (keep
+                     * everything) rather than truncate or mislabel */
+                    payload_cell = 1;
+                    ly = NULL;
+                }
+            }
+            /* where interior edges out of this cell lead: one layer
+             * deeper, the last layer repeating */
+            long deeper =
+                payload_cell ? MODE_PAYLOAD
+                : (mode + 1 < (long)nlayers ? mode + 1
+                                            : (long)nlayers - 1);
             c.fields = malloc(sizeof(cfield) * (n ? n : 1));
             for (mlsize_t i = 0; i < n; i++) {
-                if (!(i < sizeof(mask) * 8 && ((mask >> i) & 1u)))
-                    continue;                     /* unmasked: dropped */
+                int keep, interior_edge;
+                if (payload_cell) {
+                    keep = 1; interior_edge = 0;
+                } else if (ly->is_array) {
+                    keep = 1; interior_edge = 1;
+                } else {
+                    int in_i = i < 8 * sizeof(uintnat)
+                               && ((ly->interior >> i) & 1u);
+                    int in_p = i < 8 * sizeof(uintnat)
+                               && ((ly->payload >> i) & 1u);
+                    keep = in_i || in_p;      /* neither: bookkeeping */
+                    interior_edge = in_i;
+                }
+                if (!keep) continue;
                 value f = Field(v, i);
                 cfield fl = {0};
-                fl.label = label_for(v_labels, nlabels, n, i);
+                fl.label = field_label(payload_cell ? NULL : ly, i);
                 if (!Is_block(f)) {
                     capture_leaf(&fl, f);
                 } else {
@@ -427,6 +527,8 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
                         if (idx < 0) {
                             idx = (long)seen.len;
                             vec_push(&seen, f);
+                            lvec_push(&modes, interior_edge
+                                                  ? deeper : MODE_PAYLOAD);
                             itab_put(&seen_tab, (uintnat)f, idx);
                         }
                         fl.k = F_CHILD;
@@ -499,8 +601,10 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
     }
     free(cells);
     free(seen.data);
+    free(modes.data);
     free(seen_tab.keys);
     free(seen_tab.idxs);
+    layers_free(layers, nlayers);
     free(known);
 
     regarr = alloc_registry(reg, nk);

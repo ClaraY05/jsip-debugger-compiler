@@ -99,14 +99,15 @@ type root = Result | Argument of int
    each with the name the runtime catalogue knows it by and its
    mutability.  The names MUST mirror [Data_structure.of_module] in
    vreplay/data_structure.ml; only units the catalogue can walk are
-   listed (Hashtbl/Stack wait on their layouts, so their events would
-   no-op -- markers with no record).  [list]/[array] are predef-typed,
-   not declared in their unit; they need their own rule and are not
+   listed (Stack waits on its layout, so its events would no-op --
+   markers with no record).  [list]/[array] are predef-typed, not
+   declared in their unit; they need their own rule and are not
    covered. *)
 let ds_table : (string * (string * mutability)) list =
   [ "Stdlib__Map", ("Map", Immutable)
   ; "Stdlib__Set", ("Set", Immutable)
-  ; "Stdlib__Queue", ("Queue", Mutable) ]
+  ; "Stdlib__Queue", ("Queue", Mutable)
+  ; "Stdlib__Hashtbl", ("Hashtbl", Mutable) ]
 
 (* declaring unit of a uid. [Subst] copies uids verbatim, so [Item]
    survives [Map.Make], [include], [open] and aliasing.

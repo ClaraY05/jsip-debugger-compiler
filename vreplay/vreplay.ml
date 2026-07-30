@@ -44,11 +44,19 @@ let from_sexp = Sexp.from_sexp
 (* Besides the walked root, the C call echoes [known] back as
    (id, address) pairs -- the registry component of the event.  Both come
    from the same no-allocation capture, so the registry's addresses match
-   the addresses the nodes record. *)
+   the addresses the nodes record.  The third argument is the DS's
+   layout, one flattened [Data_structure.layer] per entry:
+   (labels, interior mask, payload mask, is_array). *)
 external traverse :
-  Obj.t -> (Obj.t * int) array -> string array -> int
+  Obj.t -> (Obj.t * int) array -> (string array * int * int * bool) array
   -> node * (int * nativeint) array
   = "caml_wire_traverse"
+
+let flatten_layer : Data_structure.layer -> string array * int * int * bool
+  = function
+  | Data_structure.Fixed { labels; interior; payload } ->
+    (Array.of_list labels, interior, payload, false)
+  | Data_structure.Array_elements -> ([||], 0, 0, true)
 
 (* Single write path shared with the instrumentation's {} frame markers:
    C-side fprintf+fflush.  Going through the same primitive keeps records
@@ -149,11 +157,11 @@ let snapshot ~loc ~fn ~ds ~args root =
     let r = Obj.repr root in
     if not (Obj.is_block r) then ()          (* immediates have no identity *)
     else begin
-      let { Data_structure.labels; mask } = Data_structure.layout ty in
-      let id = register r in
-      let root_node, registry =
-        traverse r (live_known ()) (Array.of_list labels) mask
+      let layers =
+        Array.of_list (List.map flatten_layer (Data_structure.layout ty))
       in
+      let id = register r in
+      let root_node, registry = traverse r (live_known ()) layers in
       emit_event ~loc ~fn ~args ~id:(Id.to_int id) ~registry
         { ds_type = ty; root_node }
     end
