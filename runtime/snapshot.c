@@ -19,10 +19,15 @@
  *   type node  = { virtual_address : nativeint
  *                ; block : (string * block) list; children : node list }
  *   external traverse :
- *     Obj.t -> (Obj.t * int) array -> string array -> int -> node
+ *     Obj.t -> (Obj.t * int) array -> string array -> int
+ *     -> node * (int * nativeint) array
  *     = "caml_wire_traverse"
  * The DS type itself stays on the OCaml side ([Vreplay.t] pairs it with
- * the root node once); the walker doesn't need it.
+ * the root node once); the walker doesn't need it.  The second component
+ * of the result echoes [known] -- the live weak registry -- as
+ * (id, address) pairs captured before any allocation, so the addresses
+ * are exactly the ones the nodes record: an Address in the snapshot
+ * resolves against this event's registry.
  *
  * Given a [root] to walk, [known] (every currently-tracked
  * object paired with its stable id, from the weak registry), and the DS's
@@ -189,6 +194,22 @@ static void capture_leaf(cfield *fl, value f)
     fl->ptr = (uintnat)f;
 }
 
+/* The registry echo: (id, address) pairs in registry order, built from
+ * data captured before any OCaml allocation. */
+static value alloc_registry(const known_ent *reg, mlsize_t nk)
+{
+    CAMLparam0();
+    CAMLlocal2(arr, pairv);
+    arr = caml_alloc(nk, 0);
+    for (mlsize_t k = 0; k < nk; k++) {
+        pairv = caml_alloc(2, 0);
+        Store_field(pairv, 0, Val_long(reg[k].id));
+        Store_field(pairv, 1, caml_copy_nativeint((intnat)reg[k].ptr));
+        Store_field(arr, k, pairv);
+    }
+    CAMLreturnT(value, arr);
+}
+
 /* Allocate the OCaml [block] value for one captured field.  Constructor
  * numbering follows sexp.ml's declaration order: Int=0 Float=1 String=2
  * Int32=3 Int64=4 Nativeint=5 Float_array=6 Address=7. */
@@ -242,28 +263,34 @@ static value alloc_block(const cfield *fl)
 }
 
 /* external traverse :
- *   Obj.t -> (Obj.t * int) array -> string array -> int -> node
+ *   Obj.t -> (Obj.t * int) array -> string array -> int
+ *   -> node * (int * nativeint) array
  *   = "caml_wire_traverse" */
 CAMLprim value caml_wire_traverse(value v_root, value v_known,
                                   value v_labels, value v_mask)
 {
     CAMLparam4(v_root, v_known, v_labels, v_mask);
     CAMLlocal5(nodes, nodev, lst, ent, bx);
-    CAMLlocal1(cons);
+    CAMLlocal3(cons, regarr, resv);
 
     uintnat mask = (uintnat)Long_val(v_mask);
     mlsize_t nlabels = Wosize_val(v_labels);
 
     /* Build the sorted pointer->id table from [known].  Reads raw pointers of
-     * the known objects; no allocation, so they can't move. */
+     * the known objects; no allocation, so they can't move.  [reg] keeps an
+     * unsorted copy in registry order for the registry echo. */
     mlsize_t nk = Is_block(v_known) ? Wosize_val(v_known) : 0;
     known_ent *known = nk ? malloc(sizeof(known_ent) * nk) : NULL;
+    known_ent *reg = nk ? malloc(sizeof(known_ent) * nk) : NULL;
     for (mlsize_t k = 0; k < nk; k++) {
         value pair = Field(v_known, k);
         known[k].ptr = (uintnat)Field(pair, 0);
         known[k].id  = (long)Long_val(Field(pair, 1));
     }
-    if (nk) qsort(known, nk, sizeof(known_ent), known_cmp);
+    if (nk) {
+        memcpy(reg, known, sizeof(known_ent) * nk);
+        qsort(known, nk, sizeof(known_ent), known_cmp);
+    }
 
     /* An immediate root has no heap cell to walk.  Not reachable from
      * vreplay.ml (it skips immediates); return a lone leaf node anyway
@@ -282,8 +309,13 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
         Store_field(nodev, 0, caml_copy_nativeint(0));
         Store_field(nodev, 1, cons);
         Store_field(nodev, 2, Val_emptylist);
+        regarr = alloc_registry(reg, nk);
+        resv = caml_alloc(2, 0);
+        Store_field(resv, 0, nodev);
+        Store_field(resv, 1, regarr);
         free(known);
-        CAMLreturn(nodev);
+        free(reg);
+        CAMLreturn(resv);
     }
 
     /* ---- phase 1: BFS, no OCaml allocation ---- */
@@ -395,7 +427,12 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
     free(seen.data);
     free(known);
 
-    CAMLreturn(Field(nodes, 0));
+    regarr = alloc_registry(reg, nk);
+    free(reg);
+    resv = caml_alloc(2, 0);
+    Store_field(resv, 0, Field(nodes, 0));
+    Store_field(resv, 1, regarr);
+    CAMLreturn(resv);
 }
 
 /* ------------------------------------------------------------------ *
