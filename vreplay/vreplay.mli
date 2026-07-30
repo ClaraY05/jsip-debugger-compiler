@@ -39,13 +39,18 @@ val from_sexp : Sexp.t -> t
    it weakly), has the C walker build the [node] tree for it, and emits
    one line through [caml_wire_emit]:
 
-     (event (id 2) (loc "File ...") (fn Map.add)
-       (args ((NO_LABEL "\"a\"") (NO_LABEL 1) (NO_LABEL m)))
+     (event (id 2)
+       (loc ((file_path t.ml) (line_number 4) (char_range (10 23))))
+       (fn (Function_name M.add))
+       (args ((No_label (expression (Unnamed "\"a\"")))
+              (No_label (expression (Unnamed m)))))
        (registry ...) (snapshot <to_sexp>))
 
-   [args] is the call's arguments as (label-kind, source-text) pairs,
-   computed at compile time (see Sexp.sexp_of_args).  No-ops when [ds]
-   is not a known data structure or [root] is immediate. *)
+   [loc], [fn] and [args] are computed at compile time and rendered in
+   the interface repo's own type shapes (see Sexp.sexp_of_loc/fn/args).
+   No-ops when [ds] is not a known data structure or [root] is
+   immediate. *)
 val snapshot :
-  loc:string -> fn:string -> ds:string -> args:(string * string) list
+  loc:string * int * int * int -> fn:string * string -> ds:string
+  -> args:(string * string * string) list
   -> 'a -> unit

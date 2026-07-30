@@ -1,18 +1,28 @@
 (* the wire format: the record each event dumps, and the emit primitive
    every byte of the dump goes through *)
 module Wire = struct
+  (* Field shapes mirror the interface repo's own types so the sexp
+     renders (Sexp.sexp_of_loc/fn/args) match what ppx_sexp_conv derives
+     there: [location] is its Location.t components (file, line, char
+     range), the first component of [function_info] and of each argument
+     triple is a constructor name of its Function_info.t / Argument.t. *)
   type t = {
-      location: string
-      ; function_type: string
-      ; function_data: string
-      ; argument_list: (string * string) list
+      location: string * int * int * int
+      ; function_info: string * string
+      ; argument_list: (string * string * string) list
   }
-  [@@deriving sexp]
 
   let format_function_call
         (exp : Typedtree.expression) (func : Typedtree.expression) args =
-    let location = Format.asprintf "%a" Location.print_loc exp.exp_loc in
-    let function_type, function_data =
+    let location =
+      let start = exp.exp_loc.Location.loc_start in
+      let stop = exp.exp_loc.Location.loc_end in
+      ( start.Lexing.pos_fname
+      , start.Lexing.pos_lnum
+      , start.Lexing.pos_cnum - start.Lexing.pos_bol
+      , stop.Lexing.pos_cnum - stop.Lexing.pos_bol )
+    in
+    let function_info =
       match func.exp_desc with
       | Texp_ident (_, lid, _) ->
         "Function_name", Format.asprintf "%a" Pprintast.longident lid.txt
@@ -33,13 +43,13 @@ module Wire = struct
           | Omitted () -> "OMITTED"
         in
         match (arg_label : Asttypes.arg_label) with
-        | Nolabel -> "NO_LABEL", argument_data
-        | Labelled label -> "LABELLED:" ^ label, argument_data
-        | Optional label -> "OPTIONAL:" ^ label, argument_data
+        | Nolabel -> "No_label", "", argument_data
+        | Labelled label -> "Labelled", label, argument_data
+        | Optional label -> "Optional", label, argument_data
       in
       List.map format_arg args
     in
-    {location; function_type; function_data; argument_list}
+    {location; function_info; argument_list}
 
   (* [external __wire_emit : string -> unit = "caml_wire_emit"], spliced
      per instrumented unit *)
@@ -173,27 +183,33 @@ let classify (exp : Typedtree.expression)
 (* Build and type [Vreplay.snapshot ~loc ~fn ~ds ~args <root>] in [env].
    [root] is always a plain identifier -- [__vreplay_res] or a mutated
    argument ([argument_root] only accepts idents) -- so typing it in the
-   post-call env resolves to the value in scope there.  [args] becomes a
-   literal [(string * string) list] of (label-kind, source-text) pairs.
-   [Vreplay] is resolved by ordinary name resolution against the
-   instrumented unit's load path ("+vreplay", driver/compmisc.ml). *)
+   post-call env resolves to the value in scope there.  [loc], [fn] and
+   [args] become literal tuples/lists of string and int constants in
+   [Wire.t]'s shapes.  [Vreplay] is resolved by ordinary name resolution
+   against the instrumented unit's load path ("+vreplay",
+   driver/compmisc.ml). *)
 let snapshot_call env ~loc ~fn ~ds ~args ~root =
   let str s =
     Ast_helper.Exp.constant
       { pconst_desc = Pconst_string (s, Location.none, None)
       ; pconst_loc = Location.none }
   in
+  let int n =
+    Ast_helper.Exp.constant
+      { pconst_desc = Pconst_integer (string_of_int n, None)
+      ; pconst_loc = Location.none }
+  in
+  let tuple parts =
+    Ast_helper.Exp.tuple (List.map (fun e -> (None, e)) parts)
+  in
   let rec list_of = function
     | [] ->
       Ast_helper.Exp.construct
         (Location.mknoloc (Longident.Lident "[]")) None
-    | (k, v) :: rest ->
+    | (k, l, v) :: rest ->
       Ast_helper.Exp.construct
         (Location.mknoloc (Longident.Lident "::"))
-        (Some (Ast_helper.Exp.tuple
-                 [ ( None
-                   , Ast_helper.Exp.tuple [ (None, str k); (None, str v) ] )
-                 ; (None, list_of rest) ]))
+        (Some (tuple [ tuple [ str k; str l; str v ]; list_of rest ]))
   in
   let snapshot_fn =
     Ast_helper.Exp.ident
@@ -202,10 +218,13 @@ let snapshot_call env ~loc ~fn ~ds ~args ~root =
             ( Location.mknoloc (Longident.Lident "Vreplay")
             , Location.mknoloc "snapshot" )))
   in
+  let file, line, char_start, char_end = loc in
+  let fn_kind, fn_text = fn in
   Typecore.type_expression env
     (Ast_helper.Exp.apply snapshot_fn
-       [ (Asttypes.Labelled "loc", str loc)
-       ; (Asttypes.Labelled "fn",  str fn)
+       [ ( Asttypes.Labelled "loc"
+         , tuple [ str file; int line; int char_start; int char_end ] )
+       ; (Asttypes.Labelled "fn", tuple [ str fn_kind; str fn_text ])
        ; (Asttypes.Labelled "ds",  str ds)
        ; (Asttypes.Labelled "args", list_of args)
        ; (Asttypes.Nolabel, Ast_helper.Exp.ident (Location.mknoloc root)) ])
@@ -330,7 +349,7 @@ let inject_mapper (emit_prim : Typedtree.primitive_description) =
             instrument_call recurse_down ~emit
               ~inject_after:(fun env ->
                 snapshot_call env ~loc:wire.Wire.location
-                  ~fn:wire.Wire.function_data ~ds
+                  ~fn:wire.Wire.function_info ~ds
                   ~args:wire.Wire.argument_list ~root) }
       end
     | _ -> recurse_down

@@ -133,8 +133,8 @@ let emit_event ~loc ~fn ~args ~id ~registry snap =
     Sexp.List
       [ Sexp.Atom "event"
       ; Sexp.List [ Sexp.Atom "id"; Sexp.Atom (string_of_int id) ]
-      ; Sexp.List [ Sexp.Atom "loc"; Sexp.Atom loc ]
-      ; Sexp.List [ Sexp.Atom "fn"; Sexp.Atom fn ]
+      ; Sexp.List [ Sexp.Atom "loc"; Sexp.sexp_of_loc loc ]
+      ; Sexp.List [ Sexp.Atom "fn"; Sexp.sexp_of_fn fn ]
       ; Sexp.List [ Sexp.Atom "args"; Sexp.sexp_of_args args ]
       ; Sexp.List [ Sexp.Atom "registry"; Sexp.sexp_of_registry registry ]
       ; Sexp.List [ Sexp.Atom "snapshot"; to_sexp snap ] ]

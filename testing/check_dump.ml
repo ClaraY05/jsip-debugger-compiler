@@ -33,14 +33,16 @@ let () =
          | Sexp.List
              [ Sexp.Atom "event"
              ; Sexp.List [ Sexp.Atom "id"; Sexp.Atom _ ]
-             ; Sexp.List [ Sexp.Atom "loc"; Sexp.Atom _ ]
-             ; Sexp.List [ Sexp.Atom "fn"; Sexp.Atom _ ]
+             ; Sexp.List [ Sexp.Atom "loc"; Sexp.List _ ]
+             ; Sexp.List
+                 [ Sexp.Atom "fn"
+                 ; Sexp.List [ Sexp.Atom _; Sexp.Atom _ ] ]
              ; Sexp.List [ Sexp.Atom "args"; Sexp.List args ]
              ; Sexp.List [ Sexp.Atom "registry"; Sexp.List reg ]
              ; Sexp.List [ Sexp.Atom "snapshot"; snap ] ] ->
            List.iter
              (function
-               | Sexp.List [ Sexp.Atom _; Sexp.Atom _ ] -> ()
+               | Sexp.List (Sexp.Atom _ :: _ :: _) -> ()
                | _ -> fail !lineno "malformed args entry")
              args;
            List.iter
