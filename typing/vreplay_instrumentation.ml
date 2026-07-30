@@ -241,9 +241,9 @@ let inject_then_run_node (exp : Typedtree.expression)
   ))))))))
 
 (* An event is an application through a known data-structure module
-   (vreplay/README.md).  MUST mirror [Vreplay.ds_of_module] in
-   vreplay/vreplay.ml: a module missing here is never instrumented, while
-   one listed here that Vreplay doesn't know is only a runtime no-op. *)
+   (vreplay/README.md).  MUST mirror [Data_structure.of_module] in
+   vreplay/data_structure.ml: a module missing here is never instrumented,
+   while one listed here that Vreplay doesn't know is only a runtime no-op. *)
 let known_ds = [ "Map"; "Set" ]
 
 (* Returns true if an event has occurred based on the function expression *)

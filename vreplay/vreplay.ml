@@ -2,39 +2,52 @@
  *
  * Linked into the instrumented program (compiled/passed alongside the user's
  * files when [-visual-replay] is used).  Owns object identity: every tracked
- * data-structure value is assigned a stable id, held WEAKLY so tracking never
- * keeps alive something the program has dropped.  The C walker [caml_wire_traverse]
- * turns one object into a flat array of cells; we serialize the result as an
- * s-expression event for a downstream visualizer to parse. *)
+ * data-structure value is assigned a stable id, held WEAKLY so tracking
+ * never keeps alive something the program has dropped.  The C walker
+ * [caml_wire_traverse] (runtime/snapshot.c) BFSes one result value into a
+ * tree of [node]s; we serialize it as one s-expression event for the
+ * downstream visualizer to parse ([to_sexp] / [from_sexp]).
+ *
+ * The catalogue of walkable data structures lives in data_structure.ml;
+ * the wire schema and all sexp conversion live in sexp.ml. *)
 
-(* Shape returned by the C walker.  Constructor order MUST match runtime/snapshot.c
-   (Cell=0, Edge=1, Ptr=2, Leaf=3). *)
-type field =
-  | Cell of int          (* index of an internal cell within this same shape *)
-  | Edge of int          (* stable id of a separately-tracked object *)
-  | Ptr of nativeint     (* opaque / boundary pointer, address only *)
-  | Leaf of string       (* decoded scalar *)
+(* ---- the wire types, re-exported from sexp.ml so [Vreplay] presents the
+   whole contract.  Constructor and field ORDER MUST match
+   runtime/snapshot.c (see sexp.ml); the representation mapping they
+   mirror is documented in sexp.mli. *)
 
-type cell = { addr : nativeint; tag : int; size : int; fields : field array }
+type block = Sexp.block =
+  | Int of int
+  | Float of float
+  | String of string
+  | Int32 of int32
+  | Int64 of int64
+  | Nativeint of nativeint
+  | Float_array of float list
+  | Address of nativeint
 
-external traverse : (Obj.t * int) array -> Obj.t -> int -> cell array
+type node = Sexp.node = {
+  virtual_address : nativeint;
+  block : (string * block) list;
+  children : node list;
+}
+
+type t = Sexp.snapshot = {
+  ds_type : Data_structure.t;
+  root_node : node;
+}
+
+let to_sexp = Sexp.to_sexp
+let from_sexp = Sexp.from_sexp
+
+external traverse :
+  Obj.t -> (Obj.t * int) array -> string array -> int -> node
   = "caml_wire_traverse"
 
-(* ---- per-data-structure layout: labels + a pointer bitmask over the fields
-   of the structure's internal node/cell type.  Hand-authored, one entry per
-   supported DS, keyed by the module the operation came from. ---- *)
-type ds_layout = { labels : string list; mask : int }
-
-let ds_info : (string, ds_layout) Hashtbl.t = Hashtbl.create 16
-(*CR: replace the ds+info with a variant record type of Map, Set, etc.*)
-let () =
-  (* stdlib Map: internal node is  Node {l; v; d; r; h}  (Empty is the int 0).
-     Structural pointers are l (bit 0) and r (bit 3). *)
-  Hashtbl.replace ds_info "Map"
-    { labels = [ "l"; "v"; "d"; "r"; "h" ]; mask = 0b01001 };
-  (* stdlib Set: internal node is  Node {l; v; r; h}.  Pointers l (bit 0), r (bit 2). *)
-  Hashtbl.replace ds_info "Set"
-    { labels = [ "l"; "v"; "r"; "h" ]; mask = 0b0101 }
+(* Single write path shared with the instrumentation's {} frame markers:
+   C-side fprintf+fflush.  Going through the same primitive keeps records
+   and markers ordered (REVIEW_FINDINGS.md #2). *)
+external emit : string -> unit = "caml_wire_emit"
 
 (* ---- identity: opaque stable ids ---- *)
 module Id : sig
@@ -106,76 +119,32 @@ let live_known () =
   end;
   Array.of_list !pairs
 
-(* ---- serialization: a flat list of nodes (adjacency list) ----
-   The C walker returns a flat [cell array]; index [i] IS node [i]'s id.  We
-   emit one record per node -- (id, address, tag, size, value, children) --
-   where [value] holds the node's non-pointer data fields (labeled) and
-   [children] is the list of ids of the nodes its structural-pointer ([Cell])
-   fields point at.  Children are referenced BY ID, never nested, so a node
-   can have any number of them and shared / cyclic structure is represented
-   exactly once with no recursion.  Hand-rolled (no Core/sexplib dependency).
-
-   e.g. root A with children B, C, and C with child D  ->
-     (node (id 0) ... (children (1 2)))   (* A *)
-     (node (id 1) ... (children ()))      (* B *)
-     (node (id 2) ... (children (3)))     (* C *)
-     (node (id 3) ... (children ()))      (* D *) *)
-
-let label_at labels i =
-  match List.nth_opt labels i with Some l -> l | None -> string_of_int i
-
-(* a non-structural field -> node data ("value"); a [Cell] is a child and is
-   listed by id in [children] instead. *)
-let render_data buf lbl = function
-  | Edge id -> Printf.bprintf buf "(%s (edge %d))" lbl id
-  | Ptr p -> Printf.bprintf buf "(%s (ptr 0x%nx))" lbl p
-  | Leaf s -> Printf.bprintf buf "(%s (leaf %S))" lbl s
-  | Cell _ -> ()
-
-let emit_event ~loc ~fn ~ds ~id ~labels ~cells =
-  let buf = Buffer.create 256 in
-  Printf.bprintf buf "(event (id %d) (loc %S) (fn %S) (ds %S) (nodes (" id loc fn ds;
-  Array.iteri
-    (fun node_id c ->
-      Printf.bprintf buf " (node (id %d) (addr 0x%nx) (tag %d) (size %d) (value ("
-        node_id c.addr c.tag c.size;
-      (* value: the node's non-pointer data fields, labeled *)
-      let sep = ref false in
-      Array.iteri
-        (fun fi fld ->
-          match fld with
-          | Cell _ -> ()
-          | _ ->
-            if !sep then Buffer.add_char buf ' ';
-            sep := true;
-            render_data buf (label_at labels fi) fld)
-        c.fields;
-      Buffer.add_string buf ")) (children (";
-      (* children: ids of the nodes this node's [Cell] fields point at *)
-      let sep = ref false in
-      Array.iter
-        (function
-          | Cell child ->
-            if !sep then Buffer.add_char buf ' ';
-            sep := true;
-            Printf.bprintf buf "%d" child
-          | _ -> ())
-        c.fields;
-      Buffer.add_string buf ")))")
-    cells;
-  Buffer.add_string buf "))\n";
-  print_string (Buffer.contents buf);
-  flush stdout
+(* One event, one line: call metadata wrapping the [to_sexp] payload.  The
+   {} depth markers around the line belong to the instrumentation, the
+   terminating newline to us. *)
+let emit_event ~loc ~fn ~id snap =
+  let line =
+    Sexp.List
+      [ Sexp.Atom "event"
+      ; Sexp.List [ Sexp.Atom "id"; Sexp.Atom (string_of_int id) ]
+      ; Sexp.List [ Sexp.Atom "loc"; Sexp.Atom loc ]
+      ; Sexp.List [ Sexp.Atom "fn"; Sexp.Atom fn ]
+      ; Sexp.List [ Sexp.Atom "snapshot"; to_sexp snap ] ]
+  in
+  emit (Sexp.to_string line ^ "\n")
 
 (* ---- entry point injected at every event ---- *)
 let snapshot ~loc ~fn ~ds root =
-  match Hashtbl.find_opt ds_info ds with
+  match Data_structure.of_module ds with
   | None -> ()                              (* not a tracked data structure *)
-  | Some { labels; mask } ->
+  | Some ty ->
     let r = Obj.repr root in
     if not (Obj.is_block r) then ()          (* immediates have no identity *)
     else begin
+      let { Data_structure.labels; mask } = Data_structure.layout ty in
       let id = register r in
-      let cells = traverse (live_known ()) r mask in
-      emit_event ~loc ~fn ~ds ~id:(Id.to_int id) ~labels ~cells
+      let root_node =
+        traverse r (live_known ()) (Array.of_list labels) mask
+      in
+      emit_event ~loc ~fn ~id:(Id.to_int id) { ds_type = ty; root_node }
     end
