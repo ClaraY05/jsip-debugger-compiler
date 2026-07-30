@@ -1,34 +1,73 @@
-(* [external __wire_emit : string -> unit = "caml_wire_emit"], spliced
-   into each instrumented unit; every byte of the dump goes through it *)
-module Emit = struct
-  let name = "__wire_emit"
-  let c_name = "caml_wire_emit"      (* defined in runtime/snapshot.c *)
+(* the wire format: the record each event dumps, and the emit primitive
+   every byte of the dump goes through *)
+module Wire = struct
+  type t = {
+      location: string
+      ; function_type: string
+      ; function_data: string
+      ; argument_list: (string * string) list
+  }
+  [@@deriving sexp]
 
-  let decl =
-    let ty_constr id =
+  let format_function_call
+        (exp : Typedtree.expression) (func : Typedtree.expression) args =
+    let location = Format.asprintf "%a" Location.print_loc exp.exp_loc in
+    let function_type, function_data =
+      match func.exp_desc with
+      | Texp_ident (_, lid, _) ->
+        "Function_name", Format.asprintf "%a" Pprintast.longident lid.txt
+      | _ ->
+        "Unnamed",
+        Format.asprintf "%a" Pprintast.expression
+          (Untypeast.untype_expression func)
+    in
+    let argument_list =
+      (* [Texp_apply] hands us an [apply_arg]: [Omitted] when the
+         application is abstracted over a labelled argument *)
+      let format_arg (arg_label, arg) =
+        let argument_data =
+          match (arg : Typedtree.apply_arg) with
+          | Arg argument ->
+            Format.asprintf "%a" Pprintast.expression
+              (Untypeast.untype_expression argument)
+          | Omitted () -> "OMITTED"
+        in
+        match (arg_label : Asttypes.arg_label) with
+        | Nolabel -> "NO_LABEL", argument_data
+        | Labelled label -> "LABELLED:" ^ label, argument_data
+        | Optional label -> "OPTIONAL:" ^ label, argument_data
+      in
+      List.map format_arg args
+    in
+    {location; function_type; function_data; argument_list}
+
+  (* [external __wire_emit : string -> unit = "caml_wire_emit"], spliced
+     per instrumented unit *)
+  let emit_name = "__wire_emit"
+  let emit_c_name = "caml_wire_emit"  (* defined in runtime/snapshot.c *)
+
+  let emit_decl =
+    let ty id =
       Ast_helper.Typ.constr (Location.mknoloc (Longident.Lident id)) []
     in
-    Ast_helper.Prim.mk_decl
-      ~prim:[ c_name ]
-      (Location.mknoloc name)
-      (Ast_helper.Typ.arrow Nolabel (ty_constr "string")
-         (ty_constr "unit"))
+    Ast_helper.Prim.mk_decl ~prim:[ emit_c_name ]
+      (Location.mknoloc emit_name)
+      (Ast_helper.Typ.arrow Nolabel (ty "string") (ty "unit"))
 
-  (* the untyped call [__wire_emit <payload>] *)
-  let call payload =
-    Ast_helper.Exp.apply
-      (Ast_helper.Exp.ident (Location.mknoloc (Longident.Lident name)))
-      [ (Nolabel
-        , Ast_helper.Exp.constant
-            { pconst_desc = Pconst_string (payload, Location.none, None)
-            ; pconst_loc = Location.none }) ]
-
-  (* the typedtree's envs were snapshotted before [decl] was spliced in,
-     so re-add the prim before typing the call *)
-  let typed_call (prim : Typedtree.primitive_description) env payload =
+  (* type [__wire_emit <payload>] against [env]. the typedtree's envs
+     were snapshotted before [emit_decl] was spliced in, so re-add the
+     prim first. *)
+  let emit (prim : Typedtree.primitive_description) env payload =
     Typecore.type_expression
       (Env.add_value prim.prim_id prim.prim_val env)
-      (call payload)
+      (Ast_helper.Exp.apply
+         (Ast_helper.Exp.ident
+            (Location.mknoloc (Longident.Lident emit_name)))
+         [ ( Nolabel
+           , Ast_helper.Exp.constant
+               { pconst_desc =
+                   Pconst_string (payload, Location.none, None)
+               ; pconst_loc = Location.none } ) ])
 end
 
 (* the binding that holds an instrumented call's result; hook call sites
@@ -133,22 +172,24 @@ let instrument_call ?inject_after (exp : Typedtree.expression)
   (seq exp.exp_env (emit exp.exp_env frame_open)
      (seq exp.exp_env (inject exp.exp_env) tail)).exp_desc
 
-(* [Immutable] ops return the structure: the traversal root is the result.
-   [Mutable] (phase 2) will root at the mutated argument instead; declaring
-   the constructor before anything builds it trips warning 37. *)
-type mutability = Immutable
+(* whether operations return the structure or update it in place *)
+type mutability = Immutable | Mutable
 
 (* the "DS traversal info table" (vreplay/README.md): declaring units of
-   the structures the replay can traverse. extend with e.g.
-   "Stdlib__Set", Immutable. *)
+   the structures the replay can traverse. [list] and [array] are predef
+   type constructors, not declared in their unit -- they need their own
+   rule and are not covered yet. *)
 let ds_table : (string * mutability) list =
-  [ "Stdlib__Map", Immutable ]
+  [ "Stdlib__Map", Immutable
+  ; "Stdlib__Hashtbl", Mutable
+  ; "Stdlib__Queue", Mutable
+  ; "Stdlib__Stack", Mutable
+  ; "Stdlib__Buffer", Mutable ]
 
-(* where an event's traversal root lives. phase 2 adds [Argument of int]
-   for mutable DS -- then the index must skip [Omitted]s, and only an
-   argument that is syntactically an ident can be re-read post-call
-   without re-evaluating or reordering (application is right-to-left). *)
-type root = Result
+(* where an event's traversal root lives: the call's result, or the
+   mutated argument at that position of [Texp_apply]'s argument list,
+   read after the call so it shows the post-state *)
+type root = Result | Argument of int
 
 (* the unit a declaration originates from: [Subst] copies uids verbatim,
    so this survives functor application, [include], [open] and aliasing.
@@ -159,31 +200,50 @@ let uid_comp_unit : Shape.Uid.t -> string option = function
   | Shape.Uid.Compilation_unit _ | Shape.Uid.Local_opaque_item _
   | Shape.Uid.Internal | Shape.Uid.Predef _ -> None
 
-(* the result type's head constructor is declared in [comp_unit]: what an
-   immutable-DS event returns. excludes queries, iteration and partial
-   application in one check; over-approximates harmlessly on e.g. [find]
-   over a map of maps (re-observes an existing map). *)
-let returns_the_structure comp_unit (exp : Typedtree.expression) =
-  match
-    Types.get_desc (Ctype.expand_head_nolink exp.exp_env exp.exp_type)
-  with
+(* does the head constructor of [ty] resolve to a declaration in
+   [comp_unit]? fail closed throughout. *)
+let head_declared_in comp_unit env ty =
+  match Types.get_desc (Ctype.expand_head_nolink env ty) with
   | Types.Tconstr (path, _, _) ->
-    begin match Env.find_type path exp.exp_env with
+    begin match Env.find_type path env with
     | decl ->
       begin match uid_comp_unit decl.type_uid with
-      | Some type_unit -> String.equal type_unit comp_unit
+      | Some declaring_unit -> String.equal declaring_unit comp_unit
       | None -> false
       end
     | exception Not_found -> false
     end
   | _ -> false
 
-(* is the application [exp] (function part [func]) a DS event, and if so
-   where is its traversal root? deliberate misses: [M.empty] (not an
-   application; observed at first manipulation), functor-param /
+(* the first argument whose head type is declared in [comp_unit]: a
+   mutable call's traversal root. only an ident is safe to re-read
+   post-call (anything else would re-evaluate or reorder); a non-ident
+   root skips the event. *)
+let argument_root comp_unit args =
+  let rec find i = function
+    | [] -> None
+    | (_, Typedtree.Arg (a : Typedtree.expression)) :: rest ->
+      if head_declared_in comp_unit a.exp_env a.exp_type then
+        begin match a.exp_desc with
+        | Texp_ident _ -> Some (Argument i)
+        | _ -> None
+        end
+      else find (i + 1) rest
+    | (_, Typedtree.Omitted ()) :: rest -> find (i + 1) rest
+  in
+  find 0 args
+
+(* is the total application [exp] (function [func], arguments [args]) a
+   DS event, and where is its root? returning the structure roots at the
+   result: all immutable manipulation, plus mutable creators ([create],
+   [copy]). any other call on a mutable module roots at its
+   structure-typed argument -- reads like [find]/[iter] included, since
+   types cannot separate them from mutators ([pop] returns the element,
+   not [unit]) and re-observing beats missing a mutation. deliberate
+   misses: [M.empty] (an ident, not an application), functor-param /
    first-class-module access, rebound functions ([let add = M.add]). *)
 let classify (exp : Typedtree.expression)
-      (func : Typedtree.expression) : root option =
+      (func : Typedtree.expression) args : root option =
   match func.exp_desc with
   | Texp_ident (_, _, vd) ->
     begin match uid_comp_unit vd.val_uid with
@@ -191,9 +251,19 @@ let classify (exp : Typedtree.expression)
     | Some comp_unit ->
       begin match List.assoc_opt comp_unit ds_table with
       | None -> None
-      | Some Immutable ->
-        if returns_the_structure comp_unit exp then Some Result
-        else None
+      | Some mut ->
+        match
+          Types.get_desc
+            (Ctype.expand_head_nolink exp.exp_env exp.exp_type)
+        with
+        | Types.Tarrow _ -> None    (* partial application *)
+        | _ ->
+          if head_declared_in comp_unit exp.exp_env exp.exp_type
+          then Some Result
+          else begin match mut with
+          | Immutable -> None
+          | Mutable -> argument_root comp_unit args
+          end
       end
     end
   | _ -> None
@@ -201,15 +271,18 @@ let classify (exp : Typedtree.expression)
 (* the mapper that rewrites each [Texp_apply] where an event occurs *)
 let inject_mapper (emit_prim : Typedtree.primitive_description) =
   let super = Tast_mapper.default in
-  let emit env payload = Emit.typed_call emit_prim env payload in
+  let emit env payload = Wire.emit emit_prim env payload in
 
   let inject_expression self (exp : Typedtree.expression) =
     let recurse_down : Typedtree.expression = super.expr self exp in
     match exp.exp_desc with
-    | Texp_apply (func, _) ->
-      begin match classify exp func with
+    | Texp_apply (func, args) ->
+      begin match classify exp func args with
       | None -> recurse_down
-      | Some Result ->
+      (* both root kinds emit the placeholder until the registry
+         hand-off lands; the variant tells that future hook what to
+         read *)
+      | Some (Result | Argument _) ->
         { exp with
           exp_desc =
             instrument_call recurse_down ~emit
@@ -233,7 +306,7 @@ let inject_instrumentation ~inject (tast : Typedtree.implementation) =
       | [] -> structure.str_final_env
     in
     let emit_prim, _env =
-      Typedecl.transl_prim_desc decl_env Location.none Emit.decl
+      Typedecl.transl_prim_desc decl_env Location.none Wire.emit_decl
     in
     let mapper = inject_mapper emit_prim in
     let structure = mapper.Tast_mapper.structure mapper structure in
