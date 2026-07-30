@@ -42,15 +42,18 @@
  *                               walked at its own events, and the
  *                               event's registry maps the id to the
  *                               structure's current address
- *   - block, no-scan tag     -> a leaf, decoded per the manual's
- *                               "Representation of OCaml data types":
+ *   - block, not walkable    -> a leaf, decoded per the manual's
+ *     (see [Walkable_tag])      "Representation of OCaml data types":
  *                               Double_tag -> Float, String_tag -> String,
  *                               Custom_tag -> Int32/Int64/Nativeint,
  *                               Double_array_tag -> Float_array,
- *                               anything else -> Address (opaque)
+ *                               anything else -> Address (opaque; incl.
+ *                               closures, objects, lazy/forward blocks
+ *                               and continuations, whose leading fields
+ *                               are raw words, not values)
  *   - block otherwise        -> a child node: BFS into it
  *     (tuples, records and non-constant constructors land here -- they
- *     are zero-tagged scannable blocks)
+ *     are regular scannable blocks, tags 0..Cont_tag-1)
  *
  * GC discipline: the BFS allocates NO OCaml value, so nothing moves during
  * the walk and the raw [value]s cached in [seen] stay valid.  Everything
@@ -60,6 +63,14 @@
  * is discovered once (one node, several parents); the OCaml printer copes
  * with the resulting DAG.
  * ------------------------------------------------------------------ */
+
+/* Blocks the BFS may enter: regular tuple/record/variant blocks (tags
+ * 0..Cont_tag-1), whose fields are all ordinary values.  Everything from
+ * Cont_tag up -- continuations, lazy/forward blocks, closures, objects,
+ * infix headers -- carries raw words (code pointers, closure info) that
+ * must not be read as values; [capture_leaf]'s default branch turns them
+ * into opaque [Address] leaves instead. */
+#define Walkable_tag(t) ((t) < Cont_tag)
 
 /* ---- tiny growable array of OCaml [value]s: BFS queue + visited set ---- */
 typedef struct { value *data; size_t len, cap; } vec;
@@ -384,7 +395,7 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
         c.fields = NULL;
         c.nfields = 0;
 
-        if (Tag_val(v) < No_scan_tag) {
+        if (Walkable_tag(Tag_val(v))) {
             mlsize_t n = Wosize_val(v);
             c.fields = malloc(sizeof(cfield) * (n ? n : 1));
             for (mlsize_t i = 0; i < n; i++) {
@@ -400,7 +411,7 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
                     if (id >= 0) {
                         fl.k = F_ID;              /* registry boundary */
                         fl.ival = (intnat)id;
-                    } else if (Tag_val(f) >= No_scan_tag) {
+                    } else if (!Walkable_tag(Tag_val(f))) {
                         capture_leaf(&fl, f);
                     } else {
                         long idx = itab_get(&seen_tab, (uintnat)f);
