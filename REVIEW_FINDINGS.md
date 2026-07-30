@@ -174,18 +174,20 @@ declaration into each unit it instruments, so the feature does not read
 `Snapshot.emit`. Keeping the module is fine; just don't rely on it being what
 registers the primitive.
 
-### 6. `[@@deriving sexp]` is a silent no-op — **fixed**
+### 6. `[@@deriving sexp]` is a silent no-op — **open** (restored with #7)
 
-Gone with `module Wire` (see #7). Whatever serializer eventually lands must
-not reintroduce the attribute — without ppx_sexp_conv it is silently
-ignored, which is how it read as though serialization existed.
+`Wire` is back, attribute included. Without ppx_sexp_conv it is silently
+ignored — there is no `sexp_of_t`. The serializer, when it lands, must be
+hand-written into `Wire`; do not rely on the attribute.
 
-### 7. `module Wire` is exported but unused — **fixed**
+### 7. `module Wire` is exported but unused — **revised**
 
-Deleted as dead code: `format_function_call` never gained a caller and the
-record only ever documented the target shape, which CLAUDE.md's wire-format
-section still does. Recover the formatter from git history when
-serialization unblocks — minus its capitalized tags (see #13).
+Deleted once as dead code, then restored by decision: it is the designated
+home of the wire format, and the emit machinery (the spliced external's
+declaration and its typed-call builder) now lives inside it. The record and
+`format_function_call` still await their caller, the future serializer.
+The `.mli` exports the record and formatter; the emit half stays internal
+(hidden by the signature — also what keeps warnings 32/69 satisfied).
 
 ### 8. `vreplay/` breaks the dune build — **open**
 
@@ -254,8 +256,19 @@ immutable structure: the result *is* the traversal root, so each event now
 runs a post-call hook (`~inject_after`, sequenced between the result
 binding and the closing `}`) that will hand the result to the runtime
 registry; until that C entry point lands it emits a `ROOT\n` placeholder
-line. Phase 1 covers `Stdlib__Map` only; mutable modules need an
-argument root (design notes in the code) and are deferred.
+line.
+
+Phase 2 (mutable structures) is in as well: `ds_table` also lists
+`Stdlib__Hashtbl`/`Queue`/`Stack`/`Buffer` as `Mutable`, and `classify`
+roots those events at the first structure-typed argument
+(`Argument i`), read post-call so the hook sees the post-state. A call
+returning the structure still roots at the result, which covers mutable
+creators (`create`/`copy`). Reads (`find`/`iter`) fire too — types
+cannot separate them from mutators (`pop` returns the element, not
+`unit`), and re-observing beats missing a mutation. A mutable root that
+is not syntactically an ident skips the event (only an ident can be
+re-read without re-evaluating). `list`/`array` are predef-typed and
+still uncovered.
 
 Deliberate misses, documented in the code: `M.empty` (an ident, not an
 application — the map is observed at its first manipulation), access
@@ -270,9 +283,8 @@ re-observe an existing structure.
 - The payload is still the hardcoded literal `"meow"` — real serialization
   is blocked on the no-sexplib problem (CLAUDE.md, "The sexp path is
   blocked").
-- For whoever writes the serializer: `dump_reader.ml` only accepts lowercase
-  tags (`function_name` / `unnamed`); the deleted `Wire` formatter emitted
-  capitalized ones — don't copy that detail back from history.
+- `Wire.format_function_call` emits capitalized `"Function_name"` /
+  `"Unnamed"`; `dump_reader.ml` only accepts lowercase tags.
 
 ---
 

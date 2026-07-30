@@ -210,10 +210,12 @@ constructor were declared in a compilation unit listed in `ds_table` — provena
 off `val_uid`/`type_uid`, which survives `Map.Make` application, `open`, `include` and
 aliasing. Phase 1 covers `Stdlib__Map` only. Each event also runs a post-call
 `~inject_after` hook, sequenced between the result binding and the closing `}`, which
-emits a `ROOT` placeholder where the result — the traversal root of an immutable
-structure — will be handed to the runtime registry once its C entry point exists.
-Mutable structures (root = the mutated argument) are deferred; design notes sit in the
-code. See `REVIEW_FINDINGS.md` #12 for details and the accepted misses.
+emits a `ROOT` placeholder where the traversal root will be handed to the runtime
+registry once its C entry point exists. Covers `Stdlib__Map` (immutable, root = the
+result) and `Stdlib__Hashtbl`/`Queue`/`Stack`/`Buffer` (mutable, root = the first
+structure-typed ident argument, read post-call; reads like `find`/`iter` fire too by
+design). `list`/`array` have predef type constructors and are still uncovered. See
+`REVIEW_FINDINGS.md` #12 for details and the accepted misses.
 
 **4. The `-visual-replay` help text is mangled.** `driver/main_args.ml:698-700` has a
 literal newline inside the string, so `./ocamlc -help` prints it across two lines.
@@ -285,9 +287,8 @@ Reference fixture: `~/jsip-debugger-interface/app/bin/dummy.txt`.
 
 ### Where this is going
 
-**Sexp is the intended direction.** The target record (formerly `module Wire` in
-`vreplay_instrumentation.ml`, deleted as dead code — recover its formatter from git
-history when serialization unblocks):
+**Sexp is the intended direction.** `module Wire` in `vreplay_instrumentation.ml`
+defines the target record (and now also hosts the emit machinery):
 
 ```ocaml
 type t =
@@ -316,8 +317,8 @@ Getting there requires, in order:
 
 ### Mismatches to fix when you get there
 
-- The parser only accepts lowercase tags (`function_name` / `unnamed`); the deleted
-  `Wire` formatter emitted capitalized ones — don't copy that back from history.
+- `Wire.format_function_call` emits capitalized `"Function_name"` / `"Unnamed"`; the
+  parser only accepts lowercase.
 - The payload is still the hardcoded literal `"meow"` — blocked on the sexp problem
   above.
 
