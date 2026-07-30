@@ -27,14 +27,18 @@ ways:
 After changing the wire format deliberately, re-run with `--promote`
 and review the diff of `expected/` like any other code change.
 
-What the cases cover: Map/Set/Queue positive paths (including reads
-that fire by design, e.g. `Queue.pop`/`peek`), classification through
-`open`/aliasing and via result types (`fold` producing a map), nested
-events and their depth markers, the args field, data representations
-(floats, tuples-as-children), the weak registry dropping GC'd
-structures, tracked-structure-inside-tracked-structure `(Id _)`
-boundaries, and negatives (plain functions, partial application,
-Hashtbl/Stack/list/array which are deliberately uncovered today).
+What the cases cover: Map/Set/Queue/Hashtbl positive paths (including
+reads that fire by design, e.g. `Queue.pop`/`peek`), classification
+through `open`/aliasing and via result types (`fold` producing a map),
+nested events and their depth markers, the args field, data
+representations (floats, tuples-as-children, wide payload tuples kept
+whole, closures as opaque addresses), multi-root calls (`transfer`,
+containers of containers -- several records inside one frame), the
+dump sink (program stdout kept separate; a `VREPLAY_SOCK` listener),
+the weak registry dropping GC'd structures,
+tracked-structure-inside-tracked-structure `(Id _)` boundaries, and
+negatives (plain functions, partial application, Stack/list/array
+which are deliberately uncovered today).
 
 Known limitation, deliberately untested: a raising instrumented call
 never emits its closing `}` (REVIEW_FINDINGS #3), so exception control
