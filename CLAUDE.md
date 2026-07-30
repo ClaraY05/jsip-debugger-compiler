@@ -139,13 +139,15 @@ Three events fire — the two `M.add` and the `M.remove`; `empty` (an ident, not
 application), `find` (returns the value, not the map) and `ignore` (not a DS call)
 don't. One event per line, prefixed by the frame markers giving its depth delta (`{` is
 +1, `}` is −1). The payload is real: the `event` wrapper carries the root's registry
-id, location, function name, the live weak registry as `(id address)` pairs (grows as
-structures are tracked, drops entries the GC collected; addresses captured by the same
-walk as the nodes), and `(snapshot ...)` — `Vreplay.to_sexp` of the
-`{ ds_type; root_node }` record with the walked shape:
+id, location, function name, the arguments as `(label-kind source-text)` pairs, the
+live weak registry as `(id address)` pairs (grows as structures are tracked, drops
+entries the GC collected; addresses captured by the same walk as the nodes), and
+`(snapshot ...)` — `Vreplay.to_sexp` of the `{ ds_type; root_node }` record with the
+walked shape:
 
 ```
 {(event (id 1) (loc "File \"/tmp/t.ml\", line 4, characters 10-23") (fn M.add)
+   (args ((NO_LABEL "\"a\"") (NO_LABEL 1) (NO_LABEL m)))
    (registry ((1 0x7f...)))
    (snapshot ((ds_type Map) (root_node ((virtual_address 0x7f...)
      (block ((l (Int 0)) (v (String a)) (d (Int 1)) (r (Int 0))))
@@ -182,8 +184,11 @@ make -C testsuite parallel                  # everything, faster
 make -C testsuite one DIR=tests/<area>      # one directory
 ```
 
-The project has added **no tests** — `-visual-replay` is entirely untested by the
-testsuite. `grep -rl 'vreplay\|wire_emit' testsuite/` returns nothing.
+The upstream testsuite has **no** `-visual-replay` coverage. The project's own tests
+live in **`testing/`** — golden-dump cases plus a structural checker
+(`testing/run_tests.sh`, see `testing/README.md`). Run them after any change to the
+instrumentation, the vreplay library, or `runtime/snapshot.c`; use `--promote` to
+re-bless expected output after a deliberate wire-format change.
 
 ---
 
@@ -205,9 +210,10 @@ corrupts the user program's backtraces).
 the wire schema, and `to_sexp`/`from_sexp` (following `[@@deriving sexp]` conventions,
 so the interface repo can mirror the type definitions with ppx_sexp_conv and derive its
 reader). The payload each event emits is real — `placeholder_record`/`meow` are gone.
-Two residues: the `[@@deriving sexp]` on `Wire.t` is still *silently ignored* (no ppx in
-the compiler build; never rely on it), and `Wire.argument_list` is computed but not yet
-on the wire.
+One residue: the `[@@deriving sexp]` on `Wire.t` is still *silently ignored* (no ppx in
+the compiler build; never rely on it). `Wire.argument_list` **is now on the wire** — an
+`(args ((<label-kind> <source-text>) ...))` field on the event wrapper, threaded through
+`Vreplay.snapshot ~args` as a literal `(string * string) list`.
 
 Note `instrument_call` (formerly `inject_then_run_node`) takes `?inject_before` and
 `?inject_after` as closures producing **arbitrary already-typed expressions** and knows
@@ -222,13 +228,13 @@ off `val_uid`/`type_uid`, which survives `Map.Make` application, `open`, `includ
 aliasing. Each event runs a post-call `~inject_after` hook, sequenced between the result
 binding and the closing `}`, which types a real `Vreplay.snapshot ~loc ~fn ~ds <root>`
 call — the hand-off into the runtime's weak registry and C walker. `ds_table` covers
-`Stdlib__Map`/`Set` (immutable, root = the result) and
-`Stdlib__Hashtbl`/`Queue`/`Stack` (mutable, root = the first structure-typed ident
-argument, read post-call; reads like `find`/`iter` fire too by design). The runtime
-catalogue (`Data_structure`) only has Map/Set layouts today, so mutable-module events
-fire but no-op at runtime — markers with no record. `list`/`array` have predef type
-constructors and are still uncovered. See `REVIEW_FINDINGS.md` #12 for details and the
-accepted misses.
+`Stdlib__Map`/`Set` (immutable, root = the result) and `Stdlib__Queue` (mutable, root =
+the first structure-typed ident argument, read post-call; reads like `pop`/`peek` fire
+too by design), each with a matching layout in the runtime catalogue
+(`Data_structure`). `Stdlib__Hashtbl`/`Stack` are **deliberately out of `ds_table`**
+until the catalogue has their layouts — listing them would emit markers with no record.
+`list`/`array` have predef type constructors and are still uncovered. See
+`REVIEW_FINDINGS.md` #12 for details and the accepted misses.
 
 **4. The `-visual-replay` help text is mangled.** `driver/main_args.ml:698-700` has a
 literal newline inside the string, so `./ocamlc -help` prints it across two lines.
@@ -310,7 +316,7 @@ Reference fixture: `~/jsip-debugger-interface/app/bin/dummy.txt`.
 
 where `(registry ...)` is the live weak registry — every tracked-and-alive structure
 as an `(id current-address)` pair, captured by the same C walk as the nodes so an
-`(Address a)` inside the snapshot resolves against it exactly — and `<payload>` is
+`(Id i)` boundary inside the snapshot resolves by indexing it — and `<payload>` is
 `Vreplay.to_sexp` of the wire record (defined in `vreplay/sexp.ml`, re-exported by
 `Vreplay`):
 
@@ -325,7 +331,7 @@ type node = { virtual_address : nativeint
 `((field value) ...)`, constructors as `(Name arg)` — so the interface can mirror the
 type definitions with ppx_sexp_conv and derive its reader. `Vreplay.from_sexp` +
 `Sexp.of_string` in this repo are the reference reader (exact inverses of the
-emitters). `module Wire` in the instrumentation now only supplies the `loc`/`fn`
+emitters). `module Wire` in the instrumentation now only supplies the `loc`/`fn`/`args`
 strings on the event wrapper.
 
 Remaining, in order:
@@ -346,9 +352,8 @@ Remaining, in order:
 
 - `dump_reader.ml` still scans the old `FUNCTION(...) ARGUMENTS(...) LOCATION(...)`
   line format; the compiler now emits the `(event ...)` sexp lines above. (The old
-  capitalized `Function_name` mismatch is moot — `function_type` is not on the wire.)
-- `Wire.argument_list` is computed but not emitted; arguments reach the wire only when
-  someone threads them into the event wrapper.
+  capitalized `Function_name` mismatch is moot — `function_type` is not on the wire.
+  `argument_list` **is** now on the wire, as the `(args ...)` field.)
 
 Two mismatches that used to be listed here are **fixed**: `runtime/snapshot.c` no longer
 prefixes lines with `[wire] ` (it writes verbatim), and the markers no longer take a

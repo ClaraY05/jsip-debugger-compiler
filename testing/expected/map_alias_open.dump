@@ -1,0 +1,2 @@
+{(event (id 1) (loc "File \"testing/cases/map_alias_open.ml\", line 7, characters 16-33") (fn add) (args ((NO_LABEL "\"k\"") (NO_LABEL 0) (NO_LABEL empty))) (registry ((1 0x7b92009f1a28))) (snapshot ((ds_type Map) (root_node ((virtual_address 0x7b92009f1a28) (block ((l (Int 0)) (v (String k)) (d (Int 0)) (r (Int 0)))) (children ()))))))
+}

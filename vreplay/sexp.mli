@@ -40,9 +40,11 @@ val of_string : string -> t
 
    Tuples, records and non-constant constructors are zero-tagged
    (scannable) blocks: within the data structure they are walked and
-   appear as child [node]s; at a tracked boundary they appear as
-   [Address].  [Address] also carries any block we do not decode
-   (Abstract_tag, an unknown Custom_tag). *)
+   appear as child [node]s; at a tracked boundary they appear as [Id] --
+   the registry id of the tracked structure, which this event's registry
+   maps to its current address (index by the int; the registry is the
+   single source of memory locations).  [Address] carries only a block
+   we do not decode (Abstract_tag, an unknown Custom_tag). *)
 type block =
   | Int of int
   | Float of float
@@ -52,6 +54,7 @@ type block =
   | Nativeint of nativeint
   | Float_array of float list
   | Address of nativeint
+  | Id of int
 
 type node = {
   virtual_address : nativeint;      (* the block's address at snapshot time *)
@@ -86,9 +89,17 @@ val to_sexp : snapshot -> t
 val from_sexp : t -> snapshot
 
 (* The live weak registry at event time as (id, current address) pairs --
-   the event wrapper carries it beside the snapshot.  Ids are stable
-   across events; addresses are captured by the same C walk as the nodes,
-   so an [Address a] inside the snapshot resolves against this event's
-   registry exactly.  Entries appear when a structure is first tracked
-   and disappear once the GC has collected it. *)
+   the event wrapper carries it beside the snapshot, and it is the single
+   source of memory locations for tracked structures: an [Id i] inside
+   the snapshot is resolved by indexing this registry.  Ids are stable
+   across events; addresses are captured by the same C walk as the
+   nodes.  Entries appear when a structure is first tracked and
+   disappear once the GC has collected it. *)
 val sexp_of_registry : (int * nativeint) array -> t
+
+(* The call's arguments as (label-kind, source-text) pairs -- label-kind
+   is NO_LABEL / LABELLED:<l> / OPTIONAL:<l>, and the text of an argument
+   the application was abstracted over is OMITTED.  Rendered as
+   ((kind text) ...), the shape [@@deriving sexp] gives
+   [(string * string) list]. *)
+val sexp_of_args : (string * string) list -> t

@@ -5,7 +5,7 @@
 (* Constructor ORDER is part of the C walker's contract --
    runtime/snapshot.c stores this value verbatim into each wire node
    (see [Vreplay.node]). *)
-type t = Map | Set
+type t = Map | Set | Queue
 
 val to_string : t -> string
 
