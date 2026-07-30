@@ -88,16 +88,15 @@ type root = Result | Argument of int
 (* declaring units of the traversable structures (vreplay/README.md),
    each with the name the runtime catalogue knows it by and its
    mutability.  The names MUST mirror [Data_structure.of_module] in
-   vreplay/data_structure.ml -- a unit listed here that the catalogue
-   doesn't know yet still fires events, but the runtime no-ops on them.
-   [list]/[array] are predef-typed, not declared in their unit; they
-   need their own rule and are not covered. *)
+   vreplay/data_structure.ml; only units the catalogue can walk are
+   listed (Hashtbl/Stack wait on their layouts, so their events would
+   no-op -- markers with no record).  [list]/[array] are predef-typed,
+   not declared in their unit; they need their own rule and are not
+   covered. *)
 let ds_table : (string * (string * mutability)) list =
   [ "Stdlib__Map", ("Map", Immutable)
   ; "Stdlib__Set", ("Set", Immutable)
-  ; "Stdlib__Hashtbl", ("Hashtbl", Mutable)
-  ; "Stdlib__Queue", ("Queue", Mutable)
-  ; "Stdlib__Stack", ("Stack", Mutable) ]
+  ; "Stdlib__Queue", ("Queue", Mutable) ]
 
 (* declaring unit of a uid. [Subst] copies uids verbatim, so [Item]
    survives [Map.Make], [include], [open] and aliasing.
@@ -171,17 +170,30 @@ let classify (exp : Typedtree.expression)
 
 (* ---- the injected observation ---- *)
 
-(* Build and type [Vreplay.snapshot ~loc ~fn ~ds <root>] in [env].
+(* Build and type [Vreplay.snapshot ~loc ~fn ~ds ~args <root>] in [env].
    [root] is always a plain identifier -- [__vreplay_res] or a mutated
    argument ([argument_root] only accepts idents) -- so typing it in the
-   post-call env resolves to the value in scope there.  [Vreplay] is
-   resolved by ordinary name resolution against the instrumented unit's
-   load path ("+vreplay", driver/compmisc.ml). *)
-let snapshot_call env ~loc ~fn ~ds ~root =
+   post-call env resolves to the value in scope there.  [args] becomes a
+   literal [(string * string) list] of (label-kind, source-text) pairs.
+   [Vreplay] is resolved by ordinary name resolution against the
+   instrumented unit's load path ("+vreplay", driver/compmisc.ml). *)
+let snapshot_call env ~loc ~fn ~ds ~args ~root =
   let str s =
     Ast_helper.Exp.constant
       { pconst_desc = Pconst_string (s, Location.none, None)
       ; pconst_loc = Location.none }
+  in
+  let rec list_of = function
+    | [] ->
+      Ast_helper.Exp.construct
+        (Location.mknoloc (Longident.Lident "[]")) None
+    | (k, v) :: rest ->
+      Ast_helper.Exp.construct
+        (Location.mknoloc (Longident.Lident "::"))
+        (Some (Ast_helper.Exp.tuple
+                 [ ( None
+                   , Ast_helper.Exp.tuple [ (None, str k); (None, str v) ] )
+                 ; (None, list_of rest) ]))
   in
   let snapshot_fn =
     Ast_helper.Exp.ident
@@ -195,6 +207,7 @@ let snapshot_call env ~loc ~fn ~ds ~root =
        [ (Asttypes.Labelled "loc", str loc)
        ; (Asttypes.Labelled "fn",  str fn)
        ; (Asttypes.Labelled "ds",  str ds)
+       ; (Asttypes.Labelled "args", list_of args)
        ; (Asttypes.Nolabel, Ast_helper.Exp.ident (Location.mknoloc root)) ])
 
 (* the identifier the post-call hook reads: the bound result, or the
@@ -317,7 +330,8 @@ let inject_mapper (emit_prim : Typedtree.primitive_description) =
             instrument_call recurse_down ~emit
               ~inject_after:(fun env ->
                 snapshot_call env ~loc:wire.Wire.location
-                  ~fn:wire.Wire.function_data ~ds ~root) }
+                  ~fn:wire.Wire.function_data ~ds
+                  ~args:wire.Wire.argument_list ~root) }
       end
     | _ -> recurse_down
   in

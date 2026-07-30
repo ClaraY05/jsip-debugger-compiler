@@ -16,6 +16,7 @@ type block = Sexp.block =
   | Nativeint of nativeint
   | Float_array of float list
   | Address of nativeint
+  | Id of int
 
 type node = Sexp.node = {
   virtual_address : nativeint;
@@ -34,11 +35,17 @@ type t = Sexp.snapshot = {
 val to_sexp : t -> Sexp.t
 val from_sexp : Sexp.t -> t
 
-(* [snapshot ~loc ~fn ~ds root] assigns [root] a stable id (holding it
-   weakly), has the C walker build the [node] tree for it, and emits one
-   line through [caml_wire_emit]:
+(* [snapshot ~loc ~fn ~ds ~args root] assigns [root] a stable id (holding
+   it weakly), has the C walker build the [node] tree for it, and emits
+   one line through [caml_wire_emit]:
 
-     (event (id 2) (loc "File ...") (fn Map.add) (snapshot <to_sexp>))
+     (event (id 2) (loc "File ...") (fn Map.add)
+       (args ((NO_LABEL "\"a\"") (NO_LABEL 1) (NO_LABEL m)))
+       (registry ...) (snapshot <to_sexp>))
 
-   No-ops when [ds] is not a known data structure or [root] is immediate. *)
-val snapshot : loc:string -> fn:string -> ds:string -> 'a -> unit
+   [args] is the call's arguments as (label-kind, source-text) pairs,
+   computed at compile time (see Sexp.sexp_of_args).  No-ops when [ds]
+   is not a known data structure or [root] is immediate. *)
+val snapshot :
+  loc:string -> fn:string -> ds:string -> args:(string * string) list
+  -> 'a -> unit

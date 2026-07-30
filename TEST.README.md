@@ -77,6 +77,7 @@ depth -1), shaped like:
 {(event (id 1)
    (loc "File \"/tmp/t.ml\", line 4, characters 10-23")
    (fn M.add)
+   (args ((NO_LABEL "\"a\"") (NO_LABEL 1) (NO_LABEL m)))
    (registry ((1 0x7f...)))
    (snapshot ((ds_type Map)
      (root_node ((virtual_address 0x7f...)
@@ -90,10 +91,15 @@ depth -1), shaped like:
 Field guide:
 
 - `id` -- the structure's id in the weak registry.
+- `args` -- the call's arguments as (label-kind, source-text) pairs,
+  computed at compile time: NO_LABEL / LABELLED:l / OPTIONAL:l, and
+  OMITTED for an argument the application was abstracted over.
 - `registry` -- every tracked-and-alive structure as `(id address)` pairs;
-  grows as structures are tracked, drops GC-collected entries. Addresses
-  come from the same C walk as the nodes, so an `(Address a)` inside a
-  snapshot resolves against it exactly.
+  grows as structures are tracked, drops GC-collected entries. It is
+  the single source of memory locations for tracked structures: a
+  nested tracked structure appears in a snapshot as `(Id i)`, resolved
+  by indexing this registry. Addresses come from the same C walk as
+  the nodes.
 - `snapshot` -- `Vreplay.to_sexp` of `{ ds_type; root_node }`, the walked
   in-memory shape (`l`/`v`/`d`/`r` here are the Map's AVL node fields:
   left, value, data, right -- per the `Data_structure` catalogue).
@@ -101,7 +107,15 @@ Field guide:
 The reference reader is `Vreplay.from_sexp` + `Sexp.of_string` in
 `vreplay/sexp.ml` -- exact inverses of the emitters.
 
-## 4. Negative test -- plain functions, expect an empty dump
+## 4. The test suite
+
+The above by hand, plus much more, lives in `testing/`:
+
+```sh
+testing/run_tests.sh    # golden dumps + structural checks, see testing/README.md
+```
+
+## 5. Negative test -- plain functions, expect an empty dump
 
 Only calls into modules in `classify`'s `ds_table` are instrumented, so a
 program with no data-structure calls must dump nothing:
@@ -114,14 +128,16 @@ runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
 /tmp/neg.out | wc -c    # must print 0
 ```
 
-## 5. Caveats when checking output
+## 6. Caveats when checking output
 
 - **Exceptions unbalance the dump.** A raising instrumented call never emits
   its closing `}`, so dumps from exception-using programs do not return to
   depth 0. Known issue -- `REVIEW_FINDINGS.md` #3.
-- **Mutable modules (Hashtbl/Queue/Stack) fire markers but no record** --
-  `classify` covers them, but the runtime catalogue only has Map/Set
-  layouts today.
+- **Queue is fully supported** (mutable: `create` roots at the result,
+  everything else at the queue argument, re-read post-call; the id is
+  stable across events because it is one structure mutated in place).
+  **Hashtbl and Stack are deliberately out of `ds_table`** until the
+  runtime catalogue has their layouts -- their calls emit nothing.
 - `test_programs/map_test.ml` cannot be compiled here (depends on `Base`);
   use the inline programs above or `.tmp_files/tmp.ml`.
 - Addresses and the exact `loc` path vary run to run and machine to

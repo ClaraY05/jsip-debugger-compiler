@@ -114,7 +114,7 @@ let of_string s =
 
 (* ---- the wire schema ----
    Constructor and field ORDER MUST match runtime/snapshot.c (block
-   constructors 0..7 and node fields 0..2 in declaration order).  See
+   constructors 0..8 and node fields 0..2 in declaration order).  See
    sexp.mli for the representation mapping these constructors mirror. *)
 
 type block =
@@ -126,6 +126,7 @@ type block =
   | Nativeint of nativeint
   | Float_array of float list
   | Address of nativeint
+  | Id of int
 
 type node = {
   virtual_address : nativeint;
@@ -166,6 +167,7 @@ let sexp_of_block = function
   | Float_array fs ->
     List [ Atom "Float_array"; List (List.map (fun f -> Atom (fstr f)) fs) ]
   | Address a -> List [ Atom "Address"; Atom (hex a) ]
+  | Id i -> List [ Atom "Id"; Atom (string_of_int i) ]
 
 let block_from_sexp = function
   | List [ Atom "Int"; Atom s ] -> Int (int_of_string s)
@@ -181,6 +183,7 @@ let block_from_sexp = function
     in
     Float_array (List.map flt fs)
   | List [ Atom "Address"; Atom a ] -> Address (Nativeint.of_string a)
+  | List [ Atom "Id"; Atom s ] -> Id (int_of_string s)
   | _ -> failwith "Sexp.from_sexp: bad block"
 
 let sexp_of_entry (lbl, b) = List [ Atom lbl; sexp_of_block b ]
@@ -221,6 +224,11 @@ let sexp_of_registry reg =
     (Array.to_list reg
      |> List.map (fun (id, addr) ->
           List [ Atom (string_of_int id); Atom (hex addr) ]))
+
+(* Event-level: the call's arguments as (label-kind, source-text) pairs,
+   computed at compile time by the instrumentation. *)
+let sexp_of_args args =
+  List (List.map (fun (k, v) -> List [ Atom k; Atom v ]) args)
 
 let to_sexp { ds_type; root_node } =
   List

@@ -25,6 +25,7 @@ type block = Sexp.block =
   | Nativeint of nativeint
   | Float_array of float list
   | Address of nativeint
+  | Id of int
 
 type node = Sexp.node = {
   virtual_address : nativeint;
@@ -127,20 +128,21 @@ let live_known () =
 (* One event, one line: call metadata, the live registry, then the
    [to_sexp] payload.  The {} depth markers around the line belong to the
    instrumentation, the terminating newline to us. *)
-let emit_event ~loc ~fn ~id ~registry snap =
+let emit_event ~loc ~fn ~args ~id ~registry snap =
   let line =
     Sexp.List
       [ Sexp.Atom "event"
       ; Sexp.List [ Sexp.Atom "id"; Sexp.Atom (string_of_int id) ]
       ; Sexp.List [ Sexp.Atom "loc"; Sexp.Atom loc ]
       ; Sexp.List [ Sexp.Atom "fn"; Sexp.Atom fn ]
+      ; Sexp.List [ Sexp.Atom "args"; Sexp.sexp_of_args args ]
       ; Sexp.List [ Sexp.Atom "registry"; Sexp.sexp_of_registry registry ]
       ; Sexp.List [ Sexp.Atom "snapshot"; to_sexp snap ] ]
   in
   emit (Sexp.to_string line ^ "\n")
 
 (* ---- entry point injected at every event ---- *)
-let snapshot ~loc ~fn ~ds root =
+let snapshot ~loc ~fn ~ds ~args root =
   match Data_structure.of_module ds with
   | None -> ()                              (* not a tracked data structure *)
   | Some ty ->
@@ -152,6 +154,6 @@ let snapshot ~loc ~fn ~ds root =
       let root_node, registry =
         traverse r (live_known ()) (Array.of_list labels) mask
       in
-      emit_event ~loc ~fn ~id:(Id.to_int id) ~registry
+      emit_event ~loc ~fn ~args ~id:(Id.to_int id) ~registry
         { ds_type = ty; root_node }
     end

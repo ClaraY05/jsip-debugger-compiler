@@ -15,7 +15,7 @@
  *   type block =
  *     | Int of int | Float of float | String of string
  *     | Int32 of int32 | Int64 of int64 | Nativeint of nativeint
- *     | Float_array of float list | Address of nativeint
+ *     | Float_array of float list | Address of nativeint | Id of int
  *   type node  = { virtual_address : nativeint
  *                ; block : (string * block) list; children : node list }
  *   external traverse :
@@ -26,8 +26,8 @@
  * the root node once); the walker doesn't need it.  The second component
  * of the result echoes [known] -- the live weak registry -- as
  * (id, address) pairs captured before any allocation, so the addresses
- * are exactly the ones the nodes record: an Address in the snapshot
- * resolves against this event's registry.
+ * are exactly the ones the nodes record: an (Id i) boundary in the
+ * snapshot is resolved by indexing this event's registry.
  *
  * Given a [root] to walk, [known] (every currently-tracked
  * object paired with its stable id, from the weak registry), and the DS's
@@ -38,7 +38,10 @@
  * masked field becomes, per the rule:
  *
  *   - not a block            -> Int (unboxed int/char/bool/constant ctor)
- *   - block, in [known]      -> Address, STOP (walked at its own events)
+ *   - block, in [known]      -> Id (its registry id), STOP -- it is
+ *                               walked at its own events, and the
+ *                               event's registry maps the id to the
+ *                               structure's current address
  *   - block, no-scan tag     -> a leaf, decoded per the manual's
  *                               "Representation of OCaml data types":
  *                               Double_tag -> Float, String_tag -> String,
@@ -70,14 +73,58 @@ static void vec_push(vec *v, value x)
     v->data[v->len++] = x;
 }
 
-/* Discovery order in [seen] IS a cell's intra-snapshot index.  Linear scan;
- * fine for the modestly-sized internal representations we walk (a persistent
- * tree between tracked boundaries).  Swap for a hash if it ever hurts. */
-static long vec_index_of(const vec *v, value x)
+/* ---- pointer -> discovery-index hash (open addressing) ----
+ * Discovery order in [seen] IS a cell's intra-snapshot index; the vec
+ * keeps that order (and is the BFS queue), the table answers "seen
+ * before, at which index?" in O(1) instead of the old linear rescan.
+ * No OCaml allocation happens during the walk, so the raw addresses
+ * used as keys cannot move.  Key 0 is the empty-slot sentinel -- heap
+ * pointers are never 0. */
+typedef struct { uintnat *keys; long *idxs; size_t cap, n; } itab;
+
+static size_t itab_slot(const itab *t, uintnat p)
 {
-    for (size_t i = 0; i < v->len; i++)
-        if (v->data[i] == x) return (long)i;
-    return -1;
+    /* pointers are word-aligned: drop the dead low bits, then mix
+     * (Fibonacci hashing; the constant truncates harmlessly on 32-bit) */
+    size_t i =
+        (size_t)((p >> 3) * (uintnat)0x9E3779B97F4A7C15ULL)
+        & (t->cap - 1);
+    while (t->keys[i] && t->keys[i] != p)
+        i = (i + 1) & (t->cap - 1);
+    return i;
+}
+
+static void itab_grow(itab *t)
+{
+    size_t ocap = t->cap;
+    uintnat *okeys = t->keys;
+    long *oidxs = t->idxs;
+    t->cap = ocap ? ocap * 2 : 64;
+    t->keys = calloc(t->cap, sizeof(uintnat));
+    t->idxs = malloc(t->cap * sizeof(long));
+    for (size_t i = 0; i < ocap; i++)
+        if (okeys[i]) {
+            size_t s = itab_slot(t, okeys[i]);
+            t->keys[s] = okeys[i];
+            t->idxs[s] = oidxs[i];
+        }
+    free(okeys);
+    free(oidxs);
+}
+
+static long itab_get(const itab *t, uintnat p)
+{
+    if (t->cap == 0) return -1;
+    size_t s = itab_slot(t, p);
+    return t->keys[s] ? t->idxs[s] : -1;
+}
+
+static void itab_put(itab *t, uintnat p, long idx)
+{
+    if (t->n * 3 >= t->cap * 2) itab_grow(t);   /* grows 0 -> 64 too */
+    size_t s = itab_slot(t, p);
+    if (!t->keys[s]) { t->keys[s] = p; t->n++; }
+    t->idxs[s] = idx;
 }
 
 /* ---- pointer -> stable id lookup, built once from [known] ---- */
@@ -121,12 +168,12 @@ static char *label_for(value v_labels, mlsize_t nlabels, mlsize_t cell_size,
 /* ---- C-side record of one retained (masked) field ---- */
 enum fkind {
     F_CHILD, F_INT, F_FLOAT, F_STRING, F_INT32, F_INT64,
-    F_NATIVEINT, F_FLOAT_ARRAY, F_ADDR
+    F_NATIVEINT, F_FLOAT_ARRAY, F_ADDR, F_ID
 };
 typedef struct {
     enum fkind k;
     long     idx;    /* F_CHILD: index of the child cell */
-    intnat   ival;   /* F_INT */
+    intnat   ival;   /* F_INT; F_ID: the registry id */
     double   dval;   /* F_FLOAT */
     char    *sval;   /* F_STRING (owned; may contain NULs) */
     size_t   slen;
@@ -212,7 +259,7 @@ static value alloc_registry(const known_ent *reg, mlsize_t nk)
 
 /* Allocate the OCaml [block] value for one captured field.  Constructor
  * numbering follows sexp.ml's declaration order: Int=0 Float=1 String=2
- * Int32=3 Int64=4 Nativeint=5 Float_array=6 Address=7. */
+ * Int32=3 Int64=4 Nativeint=5 Float_array=6 Address=7 Id=8. */
 static value alloc_block(const cfield *fl)
 {
     CAMLparam0();
@@ -253,6 +300,10 @@ static value alloc_block(const cfield *fl)
         }
         bx = caml_alloc(1, 6);
         Store_field(bx, 0, lst);
+        break;
+    case F_ID:
+        bx = caml_alloc(1, 8);
+        Store_field(bx, 0, Val_long(fl->ival));
         break;
     default:                               /* F_ADDR */
         bx = caml_alloc(1, 7);
@@ -320,10 +371,12 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
 
     /* ---- phase 1: BFS, no OCaml allocation ---- */
     vec seen = {0};
+    itab seen_tab = {0};
     ccell *cells = NULL;
     size_t ncells = 0, ccap = 0;
 
     vec_push(&seen, v_root);   /* root is cell 0 */
+    itab_put(&seen_tab, (uintnat)v_root, 0);
     for (size_t head = 0; head < seen.len; head++) {
         value v = seen.data[head];
         ccell c;
@@ -345,15 +398,16 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
                 } else {
                     long id = known_lookup(known, nk, (uintnat)f);
                     if (id >= 0) {
-                        fl.k = F_ADDR;            /* registry boundary */
-                        fl.ptr = (uintnat)f;
+                        fl.k = F_ID;              /* registry boundary */
+                        fl.ival = (intnat)id;
                     } else if (Tag_val(f) >= No_scan_tag) {
                         capture_leaf(&fl, f);
                     } else {
-                        long idx = vec_index_of(&seen, f);
+                        long idx = itab_get(&seen_tab, (uintnat)f);
                         if (idx < 0) {
                             idx = (long)seen.len;
                             vec_push(&seen, f);
+                            itab_put(&seen_tab, (uintnat)f, idx);
                         }
                         fl.k = F_CHILD;
                         fl.idx = idx;
@@ -425,6 +479,8 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
     }
     free(cells);
     free(seen.data);
+    free(seen_tab.keys);
+    free(seen_tab.idxs);
     free(known);
 
     regarr = alloc_registry(reg, nk);
