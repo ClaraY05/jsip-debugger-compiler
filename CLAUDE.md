@@ -212,7 +212,7 @@ aliasing. Phase 1 covers `Stdlib__Map` only. Each event also runs a post-call
 `~inject_after` hook, sequenced between the result binding and the closing `}`, which
 emits a `ROOT` placeholder where the traversal root will be handed to the runtime
 registry once its C entry point exists. Covers `Stdlib__Map` (immutable, root = the
-result) and `Stdlib__Hashtbl`/`Queue`/`Stack`/`Buffer` (mutable, root = the first
+result) and `Stdlib__Hashtbl`/`Queue`/`Stack` (mutable, root = the first
 structure-typed ident argument, read post-call; reads like `find`/`iter` fire too by
 design). `list`/`array` have predef type constructors and are still uncovered. See
 `REVIEW_FINDINGS.md` #12 for details and the accepted misses.
