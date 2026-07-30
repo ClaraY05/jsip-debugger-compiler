@@ -1,6 +1,6 @@
 (* The catalogue of data structures visual replay knows how to walk.
-   typing/vreplay_instrumentation.ml mirrors the module names in
-   [known_ds]; extend both together when adding a data structure. *)
+   typing/vreplay_instrumentation.ml mirrors these names in [ds_table];
+   extend both together when adding a data structure. *)
 
 (* Constructor ORDER is part of the C walker's contract --
    runtime/snapshot.c stores this value verbatim into each wire node

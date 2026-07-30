@@ -174,20 +174,20 @@ declaration into each unit it instruments, so the feature does not read
 `Snapshot.emit`. Keeping the module is fine; just don't rely on it being what
 registers the primitive.
 
-### 6. `[@@deriving sexp]` is a silent no-op — **open**
+### 6. `[@@deriving sexp]` is a silent no-op — **open** (restored with #7)
 
-`vreplay_instrumentation.ml` and its `.mli`. Without ppx_sexp_conv the
-attribute is simply ignored — there is no `sexp_of_t` (zero occurrences in the
-`.cmi`). It reads as though serialization exists. Either drop it until the
-hand-written s-expression printer lands, or replace it with an explicit
-`val to_string : t -> string` so the gap is visible.
+`Wire` is back, attribute included. Without ppx_sexp_conv it is silently
+ignored — there is no `sexp_of_t`. The serializer, when it lands, must be
+hand-written into `Wire`; do not rely on the attribute.
 
-### 7. `module Wire` is exported but unused — **open**
+### 7. `module Wire` is exported but unused — **revised**
 
-`format_function_call` has no callers; `print_call_node` is still commented
-out. The only cross-module reference to this file anywhere in the tree is
-`compile_common.ml:117`. Fixing #4 makes `Wire` *correct*, not *live* — the
-payload is still the literal `"meow"`.
+Deleted once as dead code, then restored by decision: it is the designated
+home of the wire format, and the emit machinery (the spliced external's
+declaration and its typed-call builder) now lives inside it. The record and
+`format_function_call` still await their caller, the future serializer.
+The `.mli` exports the record and formatter; the emit half stays internal
+(hidden by the signature — also what keeps warnings 32/69 satisfied).
 
 ### 8. `vreplay/` breaks the dune build — **open**
 
@@ -241,20 +241,50 @@ variable, in the style of `OCAMLRUNPARAM`) would fix this and is probably a
 prerequisite for the TUI reading a live program. Note `dump_reader.ml` already
 reads a *file path*, never stdin.
 
-### 12. Every application is instrumented — **open**
+### 12. Every application is instrumented — **fixed**
 
-`filter_func` returns `true` unconditionally, so `+` and `^` are traced along
-with everything else. Intended behaviour, per `vreplay/README.md`, is to fire
-only on data-structure creation and manipulation. Until then the dumps are far
-larger than they need to be, and now that every marker is an unbuffered
-flushing write, this costs real time.
+`filter_func` returned `true` unconditionally, so `+` and `^` were traced
+along with everything else. Replaced by `classify`, which implements the
+"DS traversal info table" from `vreplay/README.md`: an application is an
+event iff its function was *declared* in a compilation unit listed in
+`ds_table`, **and** its result type's head constructor is declared in that
+same unit — i.e. the call returns the structure. Provenance is read off
+`val_uid`/`type_uid` (`Shape.Uid.Item {comp_unit; _}`), which `Subst`
+copies verbatim, so detection survives `Map.Make` application, `include`,
+`open` and aliasing. The second check doubles as root selection for an
+immutable structure: the result *is* the traversal root, so each event now
+runs a post-call hook (`~inject_after`, sequenced between the result
+binding and the closing `}`) that will hand the result to the runtime
+registry; until that C entry point lands it emits a `ROOT\n` placeholder
+line.
+
+Phase 2 (mutable structures) is in as well: `ds_table` also lists
+`Stdlib__Hashtbl`/`Queue`/`Stack` as `Mutable`, and `classify`
+roots those events at the first structure-typed argument
+(`Argument i`), read post-call so the hook sees the post-state. A call
+returning the structure still roots at the result, which covers mutable
+creators (`create`/`copy`). Reads (`find`/`iter`) fire too — types
+cannot separate them from mutators (`pop` returns the element, not
+`unit`), and re-observing beats missing a mutation. A mutable root that
+is not syntactically an ident skips the event (only an ident can be
+re-read without re-evaluating). `list`/`array` are predef-typed and
+still uncovered.
+
+Deliberate misses, documented in the code: `M.empty` (an ident, not an
+application — the map is observed at its first manipulation), access
+through functor parameters or first-class modules (`Local_opaque_item`
+uids name the *using* unit, so they fail closed), and rebound functions
+(`let add = M.add`). Harmless over-approximations: `find` on a map whose
+values are maps, and `fold` with a map accumulator, return a map and so
+re-observe an existing structure.
 
 ### 13. Wire-format mismatches with the interface — **open**
 
-- `format_function_call` emits capitalized `"Function_name"` / `"Unnamed"`;
-  `dump_reader.ml` only accepts lowercase.
-- The payload is still the hardcoded literal `"meow"` — `print_call_node` is
-  blocked on #6.
+- The payload is still the hardcoded literal `"meow"` — real serialization
+  is blocked on the no-sexplib problem (CLAUDE.md, "The sexp path is
+  blocked").
+- `Wire.format_function_call` emits capitalized `"Function_name"` /
+  `"Unnamed"`; `dump_reader.ml` only accepts lowercase tags.
 
 ---
 
@@ -286,12 +316,14 @@ whitespace), `vreplay/vreplay.mli`, `test_programs/map_test.ml`.
 `driver/main_args.ml:698-700` has a literal newline inside the doc string, so
 `ocamlc -help` prints it across two lines with stray indentation.
 
-### 16. Synthesized nodes inherit the parent's attributes — **open**
+### 16. Synthesized nodes inherit the parent's attributes — **fixed**
 
-`mk_exp` copies the parent's `exp_attributes` onto every node it builds, and
-each synthesized `vb_pat` / `vb_attributes` does the same. A user attribute
-such as `[@inline]` is therefore replicated onto roughly five synthetic nodes
-per instrumented call. Synthesized nodes should carry `[]`.
+`mk_exp` copied the parent's `exp_attributes` onto every node it built, and
+each synthesized `vb_pat` / `vb_attributes` did the same, so a user attribute
+such as `[@inline]` was replicated onto roughly five synthetic nodes per
+instrumented call. All synthesized nodes (including the result binder's
+`val_attributes`) now carry `[]`; only the replacement node for the original
+application keeps the user's attributes.
 
 ### 17. `-visual-replay` is a silent no-op in the toplevel — **open**
 

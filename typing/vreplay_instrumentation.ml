@@ -1,3 +1,5 @@
+(* the wire format: the record each event dumps, and the emit primitive
+   every byte of the dump goes through *)
 module Wire = struct
   type t = {
       location: string
@@ -20,9 +22,8 @@ module Wire = struct
           (Untypeast.untype_expression func)
     in
     let argument_list =
-      (* [Texp_apply] hands us an [apply_arg], not an expression: it's
-         [Omitted] for an argument the application is abstracted over, i.e. a
-         labelled partial application *)
+      (* [Omitted]: the application is abstracted over a labelled
+         argument *)
       let format_arg (arg_label, arg) =
         let argument_data =
           match (arg : Typedtree.apply_arg) with
@@ -39,77 +40,144 @@ module Wire = struct
       List.map format_arg args
     in
     {location; function_type; function_data; argument_list}
-  ;;
+
+  (* [external __wire_emit : string -> unit = "caml_wire_emit"], spliced
+     per instrumented unit *)
+  let emit_name = "__wire_emit"
+  let emit_c_name = "caml_wire_emit"  (* defined in runtime/snapshot.c *)
+
+  let emit_decl =
+    let ty id =
+      Ast_helper.Typ.constr (Location.mknoloc (Longident.Lident id)) []
+    in
+    Ast_helper.Prim.mk_decl ~prim:[ emit_c_name ]
+      (Location.mknoloc emit_name)
+      (Ast_helper.Typ.arrow Nolabel (ty "string") (ty "unit"))
+
+  (* type [__wire_emit <payload>]: the typedtree's envs were snapshotted
+     before [emit_decl] was spliced in, so re-add the prim *)
+  let emit (prim : Typedtree.primitive_description) env payload =
+    Typecore.type_expression
+      (Env.add_value prim.prim_id prim.prim_val env)
+      (Ast_helper.Exp.apply
+         (Ast_helper.Exp.ident
+            (Location.mknoloc (Longident.Lident emit_name)))
+         [ ( Nolabel
+           , Ast_helper.Exp.constant
+               { pconst_desc =
+                   Pconst_string (payload, Location.none, None)
+               ; pconst_loc = Location.none } ) ])
 end
 
-(* the [external] we splice into each instrumented structure. [call_c_node]
-   refers to it by this name, so the declaration and the call sites must
-   agree. *)
-let wire_emit_name = "__wire_emit"
+(* the result binding each instrumented call introduces *)
+let res_binder_name = "__vreplay_res"
 
-let wire_external =
-  let ty_constr name =
-    Ast_helper.Typ.constr (Location.mknoloc (Longident.Lident name)) []
-  in
-  let emit_type =
-    Ast_helper.Typ.arrow Nolabel (ty_constr "string") (ty_constr "unit")
-  in
-  Ast_helper.Prim.mk_decl
-    ~prim:[ "caml_wire_emit" ]
-    (Location.mknoloc wire_emit_name)
-    emit_type
-
-(* call a c function *)
-let call_c_node input =
- let callc_function =
-   Ast_helper.Exp.ident (Location.mknoloc (Longident.Lident wire_emit_name)) in
- let callc_arg = Ast_helper.Exp.constant {
-   pconst_desc = (Pconst_string (input, Location.none, None));
-   pconst_loc = Location.none} in
- Ast_helper.Exp.apply callc_function [ (Nolabel, callc_arg) ]
-;;
-
-(* frame markers: the reader sums these to get call depth ({ is +1, } is -1),
-   so they have to reach the dump in call order. emit them with
-   [caml_wire_emit], not [Printf.printf] -- printf buffers in OCaml's stdout
-   channel and only flushes at exit, so mixing the two put every marker in the
-   run after every record. *)
+(* frame markers, summed into depth by the reader ({ +1, } -1); emitted
+   via [caml_wire_emit], never [Printf] (REVIEW_FINDINGS #2) *)
 let frame_open = "{"
 let frame_close = "}"
 
-(* makes an expression by passing down parent fields for all but env, desc,
-   and type *)
-let mk_exp (parent : Typedtree.expression) exp_env exp_type exp_desc
-  : Typedtree.expression =
-  { exp_desc
-  ; exp_loc=parent.exp_loc
-  ; exp_extra=[]
-  ; exp_type
-  ; exp_env
-  ; exp_attributes=parent.exp_attributes}
+(* ---- classification: which applications are events ---- *)
 
-(* the module a qualified application comes from: [Map.add] -> "Map",
-   [Stdlib.Map.add] -> "Map". Used as the [~ds] key into [Vreplay.ds_info]. *)
-let ds_module (func : Typedtree.expression) : string option =
-  (* [Longident.t] here is [Lident of string | Ldot of t loc * string loc
-     | Lapply of t loc * t loc], so the located components need [.txt]. *)
-  let last_mod = function
-    | Longident.Lident m -> Some m
-    | Longident.Ldot (_, m) -> Some m.txt
-    | Longident.Lapply (_, _) -> None
+type mutability = Immutable | Mutable
+
+(* where an event's traversal root lives: the result, or the mutated
+   argument at that position of the argument list, read post-call *)
+type root = Result | Argument of int
+
+(* declaring units of the traversable structures (vreplay/README.md),
+   each with the name the runtime catalogue knows it by and its
+   mutability.  The names MUST mirror [Data_structure.of_module] in
+   vreplay/data_structure.ml -- a unit listed here that the catalogue
+   doesn't know yet still fires events, but the runtime no-ops on them.
+   [list]/[array] are predef-typed, not declared in their unit; they
+   need their own rule and are not covered. *)
+let ds_table : (string * (string * mutability)) list =
+  [ "Stdlib__Map", ("Map", Immutable)
+  ; "Stdlib__Set", ("Set", Immutable)
+  ; "Stdlib__Hashtbl", ("Hashtbl", Mutable)
+  ; "Stdlib__Queue", ("Queue", Mutable)
+  ; "Stdlib__Stack", ("Stack", Mutable) ]
+
+(* declaring unit of a uid. [Subst] copies uids verbatim, so [Item]
+   survives [Map.Make], [include], [open] and aliasing.
+   [Local_opaque_item] (functor params, first-class modules) names the
+   using unit, not the origin: fail closed on it and the rest. *)
+let uid_comp_unit : Shape.Uid.t -> string option = function
+  | Shape.Uid.Item { comp_unit; _ } -> Some comp_unit
+  | Shape.Uid.Compilation_unit _ | Shape.Uid.Local_opaque_item _
+  | Shape.Uid.Internal | Shape.Uid.Predef _ -> None
+
+(* [e]'s head type constructor is declared in [comp_unit] *)
+let is_structure comp_unit (e : Typedtree.expression) =
+  match Types.get_desc (Ctype.expand_head_nolink e.exp_env e.exp_type) with
+  | Types.Tconstr (path, _, _) ->
+    begin match Env.find_type path e.exp_env with
+    | decl ->
+      begin match uid_comp_unit decl.type_uid with
+      | Some declaring_unit -> String.equal declaring_unit comp_unit
+      | None -> false
+      end
+    | exception Not_found -> false
+    end
+  | _ -> false
+
+(* partial application: the call leaves an arrow *)
+let is_partial (e : Typedtree.expression) =
+  match Types.get_desc (Ctype.expand_head_nolink e.exp_env e.exp_type) with
+  | Types.Tarrow _ -> true
+  | _ -> false
+
+(* a mutable call's root: its first structure-typed argument. only an
+   ident is safe to re-read post-call; otherwise skip the event. *)
+let argument_root comp_unit args =
+  let rec find i = function
+    | [] -> None
+    | (_, Typedtree.Omitted ()) :: rest -> find (i + 1) rest
+    | (_, Typedtree.Arg (a : Typedtree.expression)) :: rest ->
+      if not (is_structure comp_unit a) then find (i + 1) rest
+      else begin match a.exp_desc with
+      | Texp_ident _ -> Some (Argument i)
+      | _ -> None
+      end
   in
+  find 0 args
+
+(* is the application [exp] (function [func], arguments [args]) an
+   event, and where is its root? returning the structure roots at the
+   result: immutable manipulation plus mutable creators. any other
+   total mutable-module call roots at its structure argument -- reads
+   included, since types cannot tell [iter] from [remove] and [pop]
+   does not return [unit]; re-observing beats missing a mutation. *)
+let classify (exp : Typedtree.expression)
+      (func : Typedtree.expression) args : (string * root) option =
   match func.exp_desc with
-  | Texp_ident (_, lid, _) ->
-    (match lid.txt with
-     | Longident.Ldot (path, _fn) -> last_mod path.txt
-     | _ -> None)
+  | Texp_ident (_, _, vd) ->
+    begin match uid_comp_unit vd.val_uid with
+    | None -> None
+    | Some comp_unit ->
+      begin match List.assoc_opt comp_unit ds_table with
+      | None -> None
+      | Some (ds, Immutable) ->
+        if is_structure comp_unit exp then Some (ds, Result) else None
+      | Some (ds, Mutable) ->
+        if is_structure comp_unit exp then Some (ds, Result)
+        else if is_partial exp then None
+        else
+          Option.map (fun r -> (ds, r)) (argument_root comp_unit args)
+      end
+    end
   | _ -> None
 
-(* Build and type-check [Vreplay.snapshot ~loc ~fn ~ds res] in [env]. [env]
-   must have [res] bound (we run this in [env_with_res]); [Vreplay] is resolved
-   by ordinary name resolution against the instrumented unit's load path, the
-   same way the emit path resolves [__wire_emit]. *)
-let snapshot_call_node env ~loc ~fn ~ds =
+(* ---- the injected observation ---- *)
+
+(* Build and type [Vreplay.snapshot ~loc ~fn ~ds <root>] in [env].
+   [root] is always a plain identifier -- [__vreplay_res] or a mutated
+   argument ([argument_root] only accepts idents) -- so typing it in the
+   post-call env resolves to the value in scope there.  [Vreplay] is
+   resolved by ordinary name resolution against the instrumented unit's
+   load path ("+vreplay", driver/compmisc.ml). *)
+let snapshot_call env ~loc ~fn ~ds ~root =
   let str s =
     Ast_helper.Exp.constant
       { pconst_desc = Pconst_string (s, Location.none, None)
@@ -122,200 +190,163 @@ let snapshot_call_node env ~loc ~fn ~ds =
             ( Location.mknoloc (Longident.Lident "Vreplay")
             , Location.mknoloc "snapshot" )))
   in
-  let res_arg =
-    Ast_helper.Exp.ident (Location.mknoloc (Longident.Lident "res"))
-  in
   Typecore.type_expression env
     (Ast_helper.Exp.apply snapshot_fn
        [ (Asttypes.Labelled "loc", str loc)
        ; (Asttypes.Labelled "fn",  str fn)
        ; (Asttypes.Labelled "ds",  str ds)
-       ; (Asttypes.Nolabel, res_arg) ])
+       ; (Asttypes.Nolabel, Ast_helper.Exp.ident (Location.mknoloc root)) ])
 
-(* Wrap [exp] as:
+(* the identifier the post-call hook reads: the bound result, or the
+   mutated argument (an ident, per [argument_root]) *)
+let root_lid args = function
+  | Result -> Longident.Lident res_binder_name
+  | Argument i ->
+    begin match List.nth args i with
+    | (_, Typedtree.Arg
+           { Typedtree.exp_desc = Texp_ident (_, lid, _); _ }) -> lid.txt
+    | _ -> assert false  (* [argument_root] only returns ident positions *)
+    end
 
-     let () = emit "{"            (* opening frame marker *)
-     in let res = exp             (* evaluate the call, bind its result *)
-     in let () = snapshot res     (* observe the RESULT's side effects *)
-     in let () = emit "}"         (* closing frame marker *)
-     in res                       (* hand the result back unchanged *)
+(* ---- code generation ---- *)
 
-   Returns an [exp_desc], not an [expression]. The snapshot runs AFTER [res] is
-   bound so it sees the value the call produced. [emit] is passed in because
-   only the caller's env has [wire_emit_name] in scope; [snapshot] is passed
-   [env_with_res] because it references [res]. *)
-let inject_then_run_node (exp : Typedtree.expression)
-      ~(emit : Env.t -> string -> Typedtree.expression)
-      ~(snapshot : Env.t -> Typedtree.expression) =
-  let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ())
-  in
-  let res_ident = Ident.create_local "res"
-  in
+(* wrap [exp] (a Texp_apply) in frame markers, optionally running
+   [inject_before] ahead of the call and [inject_after] after it, with
+   the result bound to [res_binder_name]; a raising call skips
+   everything after itself.  returns an exp_desc. *)
+let instrument_call ?inject_before ?inject_after
+      (exp : Typedtree.expression)
+      ~(emit : Env.t -> string -> Typedtree.expression) =
+  let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ()) in
+  let res_ident = Ident.create_local res_binder_name in
   let res_val_desc : Types.value_description =
     { val_type=exp.exp_type
     ; val_kind=Types.Val_reg
     ; val_loc= exp.exp_loc
-    ; val_attributes=exp.exp_attributes
+    ; val_attributes=[]
     ; val_uid=res_uid}
   in
   let env_with_res = Env.add_value res_ident res_val_desc exp.exp_env in
-  let snapshot_exp = snapshot env_with_res in
-  (* First emit the opening frame marker *)
-  Typedtree.Texp_let (Asttypes.Nonrecursive,
-  [{
-    vb_pat=
-      { pat_desc=Tpat_any
-      ; pat_loc=exp.exp_loc
-      ; pat_extra = []
-      ; pat_type = Predef.type_unit
-      ; pat_env = exp.exp_env
-      ; pat_attributes=exp.exp_attributes
-      }
-  ; vb_expr= emit exp.exp_env frame_open
-  ; vb_rec_kind = Value_rec_types.Dynamic
-  ; vb_attributes=exp.exp_attributes
-  ; vb_loc=exp.exp_loc
-  }], mk_exp exp exp.exp_env exp.exp_type
-  (* Evaluate the function and bind to res FIRST, so the snapshot can observe
-     the value it produced. *)
-  (Typedtree.Texp_let (Asttypes.Nonrecursive,
-  [{
-    vb_pat=
-    (* for me: Ident.t * string loc * Uid.t *)
-      { pat_desc=Typedtree.Tpat_var (res_ident, Location.mknoloc "res", res_uid)
-      ; pat_loc=exp.exp_loc
-      ; pat_extra = []
-      ; pat_type = exp.exp_type
-      ; pat_env = env_with_res
-      ; pat_attributes=exp.exp_attributes
-      }
-  ; vb_expr= exp
-  ; vb_rec_kind = Value_rec_types.Dynamic
-  ; vb_attributes=exp.exp_attributes
-  ; vb_loc=exp.exp_loc
-  }]
-   (* Then run the snapshot on [res]. pat_type comes from [snapshot_exp] rather
-      than [Predef.type_unit] so it isn't forced to be unit -- the value is
-      dropped either way, since [Matching.for_let] turns a [Tpat_any] binding
-      into an [Lsequence] without ever reading pat_type. *)
-  , mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
-  (Asttypes.Nonrecursive,
-  [{
-    vb_pat=
-      { pat_desc=Tpat_any
-      ; pat_loc=exp.exp_loc
-      ; pat_extra = []
-      ; pat_type = snapshot_exp.exp_type
-      ; pat_env = env_with_res
-      ; pat_attributes=exp.exp_attributes
-      }
-  ; vb_expr= snapshot_exp
-  ; vb_rec_kind = Value_rec_types.Dynamic
-  ; vb_attributes=exp.exp_attributes
-  ; vb_loc=exp.exp_loc
-  }]
-   (* Emit the closing frame marker *)
-  , mk_exp exp env_with_res exp.exp_type (Typedtree.Texp_let
-  (Asttypes.Nonrecursive,
-  [{
-    vb_pat=
-      { pat_desc=Tpat_any
-      ; pat_loc=exp.exp_loc
-      ; pat_extra = []
-      ; pat_type = Predef.type_unit
-      ; pat_env = env_with_res
-      ; pat_attributes=exp.exp_attributes
-      }
-  ; vb_expr= emit env_with_res frame_close
-  ; vb_rec_kind = Value_rec_types.Dynamic
-  ; vb_attributes=exp.exp_attributes
-  ; vb_loc=exp.exp_loc
-  }]
-   (* "return" the result *)
-   (* for me: Path.t * Longident.t loc * Types.value_description *)
-  , mk_exp exp env_with_res exp.exp_type
-    (Typedtree.Texp_ident
-      (Path.Pident res_ident
-      , Location.mknoloc (Longident.Lident "res")
-      , res_val_desc)
-  ))))))))
-
-(* An event is an application through a known data-structure module
-   (vreplay/README.md).  MUST mirror [Data_structure.of_module] in
-   vreplay/data_structure.ml: a module missing here is never instrumented,
-   while one listed here that Vreplay doesn't know is only a runtime no-op. *)
-let known_ds = [ "Map"; "Set" ]
-
-(* Returns true if an event has occurred based on the function expression *)
-let filter_func (func : Typedtree.expression) =
-  match ds_module func with
-  | Some m -> List.mem m known_ds
-  | None -> false
-
-(* This is our special mapper that changes pexp_applies where an event occurs*)
-let inject_mapper (wire_emit : Typedtree.primitive_description) =
-  let super = Tast_mapper.default in
-
-  (* [call_c_node] refers to [wire_emit_name], which is only in scope because
-     [inject_instrumentation] splices the declaration into the structure. The
-     environments hanging off the typedtree were snapshotted by [Typemod]
-     before that happened, so the binding has to be added back before typing
-     the call. *)
-  let emit_node env payload =
-    Typecore.type_expression
-      (Env.add_value wire_emit.prim_id wire_emit.prim_val env)
-      (call_c_node payload)
+  (* synthesized node: [exp] gives only the loc; attributes stay empty *)
+  let mk env ty desc : Typedtree.expression =
+    { exp_desc=desc
+    ; exp_loc=exp.exp_loc
+    ; exp_extra=[]
+    ; exp_type=ty
+    ; exp_env=env
+    ; exp_attributes=[]}
   in
+  (* evaluate [rhs] for effect, then [body]. the rhs needn't be unit:
+     pat_type is never read, [Matching.for_let] compiles [Tpat_any] to
+     an [Lsequence]. *)
+  let seq env (rhs : Typedtree.expression) body =
+    mk env exp.exp_type (Typedtree.Texp_let
+      (Asttypes.Nonrecursive,
+      [{ vb_pat=
+           { pat_desc=Tpat_any
+           ; pat_loc=exp.exp_loc
+           ; pat_extra = []
+           ; pat_type = rhs.exp_type
+           ; pat_env = env
+           ; pat_attributes=[]
+           }
+       ; vb_expr= rhs
+       ; vb_rec_kind = Value_rec_types.Dynamic
+       ; vb_attributes=[]
+       ; vb_loc=exp.exp_loc
+       }], body))
+  in
+  (* [tail] accumulates inside-out *)
+  let tail =
+    mk env_with_res exp.exp_type
+      (Typedtree.Texp_ident
+        (Path.Pident res_ident
+        , Location.mknoloc (Longident.Lident res_binder_name)
+        , res_val_desc))
+  in
+  let tail = seq env_with_res (emit env_with_res frame_close) tail in
+  let tail =
+    match inject_after with
+    | None -> tail
+    | Some hook -> seq env_with_res (hook env_with_res) tail
+  in
+  let tail =
+    mk env_with_res exp.exp_type (Typedtree.Texp_let
+      (Asttypes.Nonrecursive,
+      [{ vb_pat=
+           { pat_desc=
+               Typedtree.Tpat_var
+                 (res_ident, Location.mknoloc res_binder_name, res_uid)
+           ; pat_loc=exp.exp_loc
+           ; pat_extra = []
+           ; pat_type = exp.exp_type
+           ; pat_env = env_with_res
+           ; pat_attributes=[]
+           }
+       ; vb_expr= exp
+       ; vb_rec_kind = Value_rec_types.Dynamic
+       ; vb_attributes=[]
+       ; vb_loc=exp.exp_loc
+       }], tail))
+  in
+  let head =
+    match inject_before with
+    | None -> tail
+    | Some hook -> seq exp.exp_env (hook exp.exp_env) tail
+  in
+  (seq exp.exp_env (emit exp.exp_env frame_open) head).exp_desc
 
-  (* this function injects our custom instrumentation at every event *)
+(* rewrite each [Texp_apply] that [classify] marks as an event: the
+   post-call hook hands the traversal root to [Vreplay.snapshot], which
+   owns identity (the weak registry), the C walk and the sexp emit *)
+let inject_mapper (emit_prim : Typedtree.primitive_description) =
+  let super = Tast_mapper.default in
+  let emit env payload = Wire.emit emit_prim env payload in
+
   let inject_expression self (exp : Typedtree.expression) =
     let recurse_down : Typedtree.expression = super.expr self exp in
     match exp.exp_desc with
-    | Texp_apply (func, args) -> if filter_func func then
-      let wire = Wire.format_function_call exp func args in
-      let ds = match ds_module func with Some m -> m | None -> "" in
-      ({  exp_desc =
-            inject_then_run_node recurse_down ~emit:emit_node
-              ~snapshot:(fun env ->
-                snapshot_call_node env
-                  ~loc:wire.Wire.location ~fn:wire.Wire.function_data ~ds)
-        ; exp_loc = exp.exp_loc
-        ; exp_extra = exp.exp_extra
-        ; exp_type = exp.exp_type
-        ; exp_env = exp.exp_env
-        ; exp_attributes = exp.exp_attributes
-      } : Typedtree.expression) else recurse_down
+    | Texp_apply (func, args) ->
+      begin match classify exp func args with
+      | None -> recurse_down
+      | Some (ds, root) ->
+        let wire = Wire.format_function_call exp func args in
+        let root = root_lid args root in
+        { exp with
+          exp_desc =
+            instrument_call recurse_down ~emit
+              ~inject_after:(fun env ->
+                snapshot_call env ~loc:wire.Wire.location
+                  ~fn:wire.Wire.function_data ~ds ~root) }
+      end
     | _ -> recurse_down
   in
-  {
-    super with
-    Tast_mapper.expr = inject_expression
-  }
+  { super with Tast_mapper.expr = inject_expression }
 
-(* exposed for compile_commmon *)
+(* exposed for compile_common *)
 let inject_instrumentation ~inject (tast : Typedtree.implementation) =
   if not inject then tast
   else
     let structure = tast.structure in
-    (* translate the external against the environment the unit opened with, so
-       that [string] and [unit] cannot have been shadowed by the unit itself *)
+    (* type the declaration in the env the unit opened with, so [string]
+       and [unit] cannot have been shadowed by the unit itself *)
     let decl_env =
       match structure.str_items with
       | item :: _ -> item.str_env
       | [] -> structure.str_final_env
     in
-    let wire_emit, _env =
-      Typedecl.transl_prim_desc decl_env Location.none wire_external
+    let emit_prim, _env =
+      Typedecl.transl_prim_desc decl_env Location.none Wire.emit_decl
     in
-    let mapper = inject_mapper wire_emit in
+    let mapper = inject_mapper emit_prim in
     let structure = mapper.Tast_mapper.structure mapper structure in
-    let wire_item : Typedtree.structure_item =
-      { str_desc = Typedtree.Tstr_primitive wire_emit
+    let emit_item : Typedtree.structure_item =
+      { str_desc = Typedtree.Tstr_primitive emit_prim
       ; str_loc = Location.none
       ; str_env = decl_env }
     in
-    (* [Tstr_primitive] contributes no field to the module block, so prepending
-       it leaves [str_type] and the coercion [Typemod] computed still valid *)
+    (* [Tstr_primitive] adds no field to the module block, so prepending
+       it leaves [str_type] and [Typemod]'s coercion valid *)
     { tast with
       structure =
-        { structure with str_items = wire_item :: structure.str_items } }
+        { structure with str_items = emit_item :: structure.str_items } }

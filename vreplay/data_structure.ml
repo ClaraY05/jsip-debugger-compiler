@@ -6,8 +6,9 @@ type t = Map | Set
 
 let to_string = function Map -> "Map" | Set -> "Set"
 
-(* The module name the instrumentation extracted at the call site.
-   [known_ds] in typing/vreplay_instrumentation.ml mirrors this list. *)
+(* The DS name the instrumentation passes at each event ([ds_table] in
+   typing/vreplay_instrumentation.ml -- it may list units, e.g. Hashtbl,
+   that have no entry here yet; those events no-op at runtime). *)
 let of_module = function
   | "Map" -> Some Map
   | "Set" -> Some Set
