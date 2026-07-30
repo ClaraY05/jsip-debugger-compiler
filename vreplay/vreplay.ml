@@ -36,42 +36,74 @@ let () =
   Hashtbl.replace ds_info "Set"
     { labels = [ "l"; "v"; "r"; "h" ]; mask = 0b0101 }
 
-(* ---- registry: an ephemeron for O(1) "already has an id?" lookup, plus a
-   weak-referenced list so we can enumerate the live tracked set (the ephemeron
-   Make interface offers no iteration).  Both are non-pinning. ---- *)
-module Phys = struct
-  type t = Obj.t
-  let equal = ( == )                                    (* physical identity *)
-  (* Hash on tag+size only: content-free (so a mutated key keeps its bucket)
-     and address-free (so a GC move never rehashes).  Collisions resolved by ==. *)
-  let hash v = Obj.size v lxor (Obj.tag v lsl 10)
+(* ---- identity: opaque stable ids ---- *)
+module Id : sig
+  type t
+  val fresh : unit -> t
+  val to_int : t -> int
+end = struct
+  type t = int
+  let next = ref 0
+  let fresh () = incr next; !next
+  let to_int id = id
 end
 
-module Reg = Ephemeron.K1.Make (Phys)
+(* ---- registry: one growable array of weakly-held entries.  Identity is
+   resolved by scanning with physical equality -- tracked values are heap
+   blocks, so their addresses move under the GC and their contents may
+   mutate; neither is a stable hash key, hence no hashing here at all.  (The
+   C walker's per-call address table is fine: nothing moves during a walk
+   because it never allocates.)  Entries are non-pinning; an entry whose
+   object has been collected is dropped at the next [live_known], retiring
+   its id. ---- *)
+type entry = { id : Id.t; values : Obj.t Weak.t }
 
-let reg : int Reg.t = Reg.create 1024
-let known : (Obj.t Weak.t * int) list ref = ref []
-
-let gensym =
-  let counter = ref 0 in
-  fun () -> incr counter; !counter
+let registry : entry Dynarray.t = Dynarray.create ()
 
 let weak_of (o : Obj.t) : Obj.t Weak.t =
   let w = Weak.create 1 in
   Weak.set w 0 (Some o);
   w
 
+(* The id already assigned to [o], if any. *)
+let find_id (o : Obj.t) : Id.t option =
+  let n = Dynarray.length registry in
+  let rec go i =
+    if i >= n then None
+    else
+      let e = Dynarray.get registry i in
+      match Weak.get e.values 0 with
+      | Some v when v == o -> Some e.id
+      | _ -> go (i + 1)
+  in
+  go 0
+
+let register (o : Obj.t) : Id.t =
+  match find_id o with
+  | Some id -> id
+  | None ->
+    let id = Id.fresh () in
+    Dynarray.add_last registry { id; values = weak_of o };
+    id
+
 (* Snapshot of the currently-live tracked objects as (value, id) pairs; also
-   prunes entries whose object has been collected (retiring their ids). *)
+   compacts the registry, dropping entries whose object has been collected
+   (retiring their ids). *)
 let live_known () =
-  let kept = ref [] and pairs = ref [] in
-  List.iter
-    (fun (w, id) ->
-      match Weak.get w 0 with
-      | Some o -> kept := (w, id) :: !kept; pairs := (o, id) :: !pairs
+  let live = Dynarray.create () in
+  let pairs = ref [] in
+  Dynarray.iter
+    (fun e ->
+      match Weak.get e.values 0 with
+      | Some o ->
+        Dynarray.add_last live e;
+        pairs := (o, Id.to_int e.id) :: !pairs
       | None -> ())
-    !known;
-  known := !kept;
+    registry;
+  if Dynarray.length live < Dynarray.length registry then begin
+    Dynarray.clear registry;
+    Dynarray.append registry live
+  end;
   Array.of_list !pairs
 
 (* ---- serialization: a flat list of nodes (adjacency list) ----
@@ -143,15 +175,7 @@ let snapshot ~loc ~fn ~ds root =
     let r = Obj.repr root in
     if not (Obj.is_block r) then ()          (* immediates have no identity *)
     else begin
-      let id =
-        match Reg.find_opt reg r with
-        | Some id -> id
-        | None ->
-          let id = gensym () in
-          Reg.add reg r id;
-          known := (weak_of r, id) :: !known;
-          id
-      in
+      let id = register r in
       let cells = traverse (live_known ()) r mask in
-      emit_event ~loc ~fn ~ds ~id ~labels ~cells
+      emit_event ~loc ~fn ~ds ~id:(Id.to_int id) ~labels ~cells
     end
