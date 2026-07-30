@@ -1,5 +1,6 @@
 (* The rest of the Queue surface: [peek] (a read; fires by design),
-   [transfer] (two queue arguments; roots at the first), [clear]. *)
+   [transfer] (two queue arguments, both mutated, both observed --
+   two records in one frame), [clear]. *)
 let () =
   let q = Queue.create () in
   Queue.add 1 q;
