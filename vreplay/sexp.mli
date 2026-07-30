@@ -84,3 +84,11 @@ type snapshot = {
    of [to_sexp] and raises [Failure] on any other shape. *)
 val to_sexp : snapshot -> t
 val from_sexp : t -> snapshot
+
+(* The live weak registry at event time as (id, current address) pairs --
+   the event wrapper carries it beside the snapshot.  Ids are stable
+   across events; addresses are captured by the same C walk as the nodes,
+   so an [Address a] inside the snapshot resolves against this event's
+   registry exactly.  Entries appear when a structure is first tracked
+   and disappear once the GC has collected it. *)
+val sexp_of_registry : (int * nativeint) array -> t

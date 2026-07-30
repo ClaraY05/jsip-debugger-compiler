@@ -212,6 +212,16 @@ let rec node_from_sexp = function
     ; children = List.map node_from_sexp kids }
   | _ -> failwith "Sexp.from_sexp: bad node"
 
+(* Event-level: the live weak registry at event time, as (id, current
+   address) pairs.  Ids are stable across events; the addresses are
+   captured by the same C walk as the nodes, so an [Address a] in the
+   snapshot resolves against this event's registry exactly. *)
+let sexp_of_registry reg =
+  List
+    (Array.to_list reg
+     |> List.map (fun (id, addr) ->
+          List [ Atom (string_of_int id); Atom (hex addr) ]))
+
 let to_sexp { ds_type; root_node } =
   List
     [ List [ Atom "ds_type"; Atom (Data_structure.to_string ds_type) ]

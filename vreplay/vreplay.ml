@@ -40,8 +40,13 @@ type t = Sexp.snapshot = {
 let to_sexp = Sexp.to_sexp
 let from_sexp = Sexp.from_sexp
 
+(* Besides the walked root, the C call echoes [known] back as
+   (id, address) pairs -- the registry component of the event.  Both come
+   from the same no-allocation capture, so the registry's addresses match
+   the addresses the nodes record. *)
 external traverse :
-  Obj.t -> (Obj.t * int) array -> string array -> int -> node
+  Obj.t -> (Obj.t * int) array -> string array -> int
+  -> node * (int * nativeint) array
   = "caml_wire_traverse"
 
 (* Single write path shared with the instrumentation's {} frame markers:
@@ -99,9 +104,9 @@ let register (o : Obj.t) : Id.t =
     Dynarray.add_last registry { id; values = weak_of o };
     id
 
-(* Snapshot of the currently-live tracked objects as (value, id) pairs; also
-   compacts the registry, dropping entries whose object has been collected
-   (retiring their ids). *)
+(* Snapshot of the currently-live tracked objects as (value, id) pairs, in
+   registry (insertion) order; also compacts the registry, dropping entries
+   whose object has been collected (retiring their ids). *)
 let live_known () =
   let live = Dynarray.create () in
   let pairs = ref [] in
@@ -117,18 +122,19 @@ let live_known () =
     Dynarray.clear registry;
     Dynarray.append registry live
   end;
-  Array.of_list !pairs
+  Array.of_list (List.rev !pairs)
 
-(* One event, one line: call metadata wrapping the [to_sexp] payload.  The
-   {} depth markers around the line belong to the instrumentation, the
-   terminating newline to us. *)
-let emit_event ~loc ~fn ~id snap =
+(* One event, one line: call metadata, the live registry, then the
+   [to_sexp] payload.  The {} depth markers around the line belong to the
+   instrumentation, the terminating newline to us. *)
+let emit_event ~loc ~fn ~id ~registry snap =
   let line =
     Sexp.List
       [ Sexp.Atom "event"
       ; Sexp.List [ Sexp.Atom "id"; Sexp.Atom (string_of_int id) ]
       ; Sexp.List [ Sexp.Atom "loc"; Sexp.Atom loc ]
       ; Sexp.List [ Sexp.Atom "fn"; Sexp.Atom fn ]
+      ; Sexp.List [ Sexp.Atom "registry"; Sexp.sexp_of_registry registry ]
       ; Sexp.List [ Sexp.Atom "snapshot"; to_sexp snap ] ]
   in
   emit (Sexp.to_string line ^ "\n")
@@ -143,8 +149,9 @@ let snapshot ~loc ~fn ~ds root =
     else begin
       let { Data_structure.labels; mask } = Data_structure.layout ty in
       let id = register r in
-      let root_node =
+      let root_node, registry =
         traverse r (live_known ()) (Array.of_list labels) mask
       in
-      emit_event ~loc ~fn ~id:(Id.to_int id) { ds_type = ty; root_node }
+      emit_event ~loc ~fn ~id:(Id.to_int id) ~registry
+        { ds_type = ty; root_node }
     end

@@ -4,8 +4,9 @@
 
 A **fork of the OCaml compiler** (fork point `511483454`, upstream 5.6.0+dev) carrying one
 feature: a `-visual-replay` flag that injects instrumentation into an arbitrary OCaml
-program at the **Typedtree** layer, so that running the compiled program dumps a log of
-every function call it makes.
+program at the **Typedtree** layer, so that running the compiled program dumps one sexp
+event per tracked data-structure operation (Map/Set today), each carrying a walked
+snapshot of the structure's in-memory shape.
 
 This is one half of a two-repo project:
 
@@ -31,14 +32,15 @@ this list.** If you are grepping the whole tree, you are probably lost.
 
 | File | Role |
 |---|---|
-| `typing/vreplay_instrumentation.ml` / `.mli` | **The heart.** A `Tast_mapper` that rewrites every `Texp_apply` to emit instrumentation around the call. |
+| `typing/vreplay_instrumentation.ml` / `.mli` | **The heart.** A `Tast_mapper` that rewrites each `Texp_apply` that `classify` marks as a DS event: frame markers, result binding, and a post-call `Vreplay.snapshot` hand-off. |
 | `driver/compile_common.ml:117` | The hookpoint — one line, pipes the typed AST through the mapper. |
 | `parsing/snapshot.ml` / `.mli` | `external emit : string -> unit = "caml_wire_emit"`. **Nothing references it** — the mapper splices its own `external` into each instrumented unit. Kept deliberately; see `REVIEW_FINDINGS.md` #5. |
-| `runtime/snapshot.c` | Defines `caml_wire_emit`. Writes its argument to stdout **verbatim** and flushes — no prefix, no added newline. Framing is the OCaml side's job. |
+| `runtime/snapshot.c` | Defines `caml_wire_emit` (verbatim write + flush; framing is the OCaml side's job) and `caml_wire_traverse`, the no-allocation BFS walker that builds each event's `node` tree. |
+| `vreplay/` | **The runtime library** linked into instrumented programs: `data_structure.{ml,mli}` (catalogue: `Map \| Set` + per-type labels/masks), `sexp.{ml,mli}` (sexp AST + printer/parser + the wire schema + `to_sexp`/`from_sexp`), `vreplay.{ml,mli}` (weak registry + `snapshot`, the injected entry point). Built by `make vreplay` (part of `all`) into `vreplay/vreplay.cma`. |
+| `bytecomp/bytelink.ml:950`, `driver/compmisc.ml:46` | Flag-gated linking: `vreplay.cma` is prepended after `stdlib.cma`, and `+vreplay` joins the load path, only under `-visual-replay`. |
 | `utils/clflags.ml:255`, `.mli:225` | `let visual_replay = ref false` |
 | `driver/main_args.ml:698` + 5 module lists | `-visual-replay` flag wiring. |
-| `Makefile:92`, `:174`, `:1251` | Build wiring for the above. |
-| `vreplay/` | **Empty stubs.** `vreplay.ml`/`.c` are 0 bytes; `vreplay.mli` is prose pseudocode, **not valid OCaml** — and it *is* listed in the root `dune`, so `dune build` cannot succeed. Not built by `make`. |
+| `Makefile:92`, `:174`, `:863`, `:1251` | Build wiring; `:863` is the `vreplay` library target. |
 | `test_programs/map_test.ml` | Test input — **cannot be compiled by this tree** (see below). |
 | `REVIEW_FINDINGS.md` | Standing list of known bugs and open design decisions, with repros. Read it before starting on the wire format. |
 
@@ -115,7 +117,10 @@ printf 'let g x = x + 1\nlet f x = x + 2\nlet () = ignore (f (g 1))\n' > /tmp/ne
 ./ocamlc -visual-replay -o /tmp/neg.out /tmp/neg.ml && /tmp/neg.out | wc -c   # 0
 ```
 
-The positive smoke test needs a Map program:
+The positive smoke test needs a Map program. Note `-I vreplay`: the injected call
+references `Vreplay`, and while `compmisc` adds `+vreplay` to the load path, that
+resolves under `standard_library`, where nothing installs the library — from the repo
+root, `-I vreplay` covers both the cmi at typing and the cma at link:
 
 ```sh
 cat > /tmp/t.ml <<'EOF'
@@ -127,24 +132,30 @@ let () =
   let m = M.remove "a" m in
   ignore (M.find "b" m)
 EOF
-./ocamlc -visual-replay -o /tmp/t.out /tmp/t.ml && /tmp/t.out
+./ocamlc -visual-replay -I vreplay -o /tmp/t.out /tmp/t.ml && /tmp/t.out
 ```
 
-Three events fire — the two `M.add` and the `M.remove`; `empty` (not an application),
-`find` and `ignore` (not events) don't. One record per line, each prefixed by the frame
-markers giving its depth delta (`{` is +1, `}` is −1); the payload is still the literal
-`meow`, and `ROOT` is the placeholder for the traversal-root hand-off that runs after
-each call returns, inside its frame:
+Three events fire — the two `M.add` and the `M.remove`; `empty` (an ident, not an
+application), `find` (returns the value, not the map) and `ignore` (not a DS call)
+don't. One event per line, prefixed by the frame markers giving its depth delta (`{` is
++1, `}` is −1). The payload is real: the `event` wrapper carries the root's registry
+id, location, function name, the live weak registry as `(id address)` pairs (grows as
+structures are tracked, drops entries the GC collected; addresses captured by the same
+walk as the nodes), and `(snapshot ...)` — `Vreplay.to_sexp` of the
+`{ ds_type; root_node }` record with the walked shape:
 
 ```
-{meow
-ROOT
-}{meow
-ROOT
-}{meow
-ROOT
+{(event (id 1) (loc "File \"/tmp/t.ml\", line 4, characters 10-23") (fn M.add)
+   (registry ((1 0x7f...)))
+   (snapshot ((ds_type Map) (root_node ((virtual_address 0x7f...)
+     (block ((l (Int 0)) (v (String a)) (d (Int 1)) (r (Int 0))))
+     (children ()))))))
+}{(event (id 2) ... (registry ((1 0x7f...) (2 0x7f...))) ...)
+}{(event (id 3) ... (fn M.remove) ...)
 }
 ```
+
+(each event is one line on the wire; wrapped here for reading)
 
 **All of that goes through `caml_wire_emit`**, markers included. Do not reintroduce
 `Printf.printf` for the markers: it writes into OCaml's stdout *channel* buffer, which
@@ -157,11 +168,11 @@ No `-I` or stdlib flags needed — `./ocamlc -config` already points `standard_l
 **Do not use `_install/bin/ocamlc*`.** `_install/` is committed junk (see Repo hygiene);
 its binaries have shebangs pointing at paths that don't exist on this machine.
 
-**Trap once the C path lands:** emitted bytecode gets the header
+**Trap:** emitted bytecode gets the header
 `#!/home/ubuntu/jsip_debugger/_install/bin/ocamlrun-d104`. That committed runtime has
-**zero** occurrences of `caml_wire_emit`, while the freshly built `runtime/ocamlrun` has
-four. So after a successful rebuild you must either `make install` or link with
-`-use-runtime runtime/ocamlrun`, or the program dies with
+**zero** occurrences of `caml_wire_emit` or `caml_wire_traverse`, both of which every
+instrumented program now needs. So after a successful rebuild you must either
+`make install` or link with `-use-runtime runtime/ocamlrun`, or the program dies with
 `unavailable primitive caml_wire_emit`.
 
 ### Testsuite
@@ -189,33 +200,35 @@ depth as an explicit field and drop closing markers entirely — see `REVIEW_FIN
 #3, which also explains why re-raising from a `Texp_try` is the wrong first move (it
 corrupts the user program's backtraces).
 
-**2. The sexp path is blocked.** `[@@deriving sexp]` and the commented-out
-`Sexplib.Sexp.to_string_hum` require ppx_sexp_conv / sexplib, which the **compiler build
-does not have and cannot easily get** — the compiler bootstraps against its own stdlib,
-not opam. Without ppx the attribute is *silently ignored*: there is no `sexp_of_t`
-(zero occurrences in the `.cmi`). This is why `print_call_node` is commented out and why
-injection hardcodes `placeholder_record = "meow\n"`. Solving it is the main blocker on
-the compiler side.
+**2. The sexp path — unblocked.** Serialization no longer waits on sexplib:
+`vreplay/sexp.ml` hand-rolls the s-expression AST, a sexplib-compatible printer/parser,
+the wire schema, and `to_sexp`/`from_sexp` (following `[@@deriving sexp]` conventions,
+so the interface repo can mirror the type definitions with ppx_sexp_conv and derive its
+reader). The payload each event emits is real — `placeholder_record`/`meow` are gone.
+Two residues: the `[@@deriving sexp]` on `Wire.t` is still *silently ignored* (no ppx in
+the compiler build; never rely on it), and `Wire.argument_list` is computed but not yet
+on the wire.
 
-Note `instrument_call` (formerly `inject_then_run_node`) takes `~inject` and
-`~inject_after` as closures producing **arbitrary already-typed expressions** and knows
-nothing about what they do — the real instrumentation will be a good deal more than one
-`caml_wire_emit` call (traversing argument values, allocating, several writes). Keep it
-that way; don't push string-payload assumptions back into it. It owns only the `{}`
-markers. Terminating a record with a newline is the hooks' job.
+Note `instrument_call` (formerly `inject_then_run_node`) takes `?inject_before` and
+`?inject_after` as closures producing **arbitrary already-typed expressions** and knows
+nothing about what they do. Keep it that way; don't push payload assumptions back into
+it. It owns only the `{}` markers; everything else, record newlines included, belongs to
+the hooks.
 
 **3. Filtering — fixed.** `filter_func` (which returned `true` unconditionally) is now
 `classify`: an application is an event iff its function *and* its result type's head
 constructor were declared in a compilation unit listed in `ds_table` — provenance read
 off `val_uid`/`type_uid`, which survives `Map.Make` application, `open`, `include` and
-aliasing. Phase 1 covers `Stdlib__Map` only. Each event also runs a post-call
-`~inject_after` hook, sequenced between the result binding and the closing `}`, which
-emits a `ROOT` placeholder where the traversal root will be handed to the runtime
-registry once its C entry point exists. Covers `Stdlib__Map` (immutable, root = the
-result) and `Stdlib__Hashtbl`/`Queue`/`Stack` (mutable, root = the first
-structure-typed ident argument, read post-call; reads like `find`/`iter` fire too by
-design). `list`/`array` have predef type constructors and are still uncovered. See
-`REVIEW_FINDINGS.md` #12 for details and the accepted misses.
+aliasing. Each event runs a post-call `~inject_after` hook, sequenced between the result
+binding and the closing `}`, which types a real `Vreplay.snapshot ~loc ~fn ~ds <root>`
+call — the hand-off into the runtime's weak registry and C walker. `ds_table` covers
+`Stdlib__Map`/`Set` (immutable, root = the result) and
+`Stdlib__Hashtbl`/`Queue`/`Stack` (mutable, root = the first structure-typed ident
+argument, read post-call; reads like `find`/`iter` fire too by design). The runtime
+catalogue (`Data_structure`) only has Map/Set layouts today, so mutable-module events
+fire but no-op at runtime — markers with no record. `list`/`array` have predef type
+constructors and are still uncovered. See `REVIEW_FINDINGS.md` #12 for details and the
+accepted misses.
 
 **4. The `-visual-replay` help text is mangled.** `driver/main_args.ml:698-700` has a
 literal newline inside the string, so `./ocamlc -help` prints it across two lines.
@@ -225,11 +238,12 @@ four frontends, but `toplevel/` never goes through `compile_common` — it types
 via `Typemod.type_toplevel_phrase` (`toplevel/topcommon.ml:210`). So `ocaml
 -visual-replay` accepts the flag and does nothing.
 
-**6. `dune build` cannot succeed.** `vreplay/vreplay.mli` is prose, not OCaml
-(`./ocamlc -stop-after parsing vreplay/vreplay.mli` → `Error: Syntax error`), and it is
-listed in the root `dune`. Conversely `vreplay_instrumentation` is in **no** dune file,
-so Merlin can't see the one file you actually edit. Since dune is only a Merlin helper
-here, that's backwards.
+**6. `dune build` cannot succeed.** The root `dune` still lists a `vreplay` module from
+the stub era, and none of the files actually edited — `vreplay_instrumentation`, the
+`vreplay/` library trio — appear in **any** dune file, so Merlin/ocamllsp report "No
+config found" on exactly the files this project works on. Since dune is only a Merlin
+helper here, that's backwards. (The old "`vreplay.mli` is prose → syntax error" claim
+is gone: the file is real OCaml now.)
 
 **7. `test_programs/map_test.ml` cannot be built here.** It opens `Base`, which exists
 only in opam switches whose CMI magic (`Caml1999I578`) is incompatible with this
@@ -285,29 +299,42 @@ line that returns depth to 0 or the reader raises. It reads a **file path**, nev
 
 Reference fixture: `~/jsip-debugger-interface/app/bin/dummy.txt`.
 
-### Where this is going
+### What the compiler emits today
 
-**Sexp is the intended direction.** `module Wire` in `vreplay_instrumentation.ml`
-defines the target record (and now also hosts the emit machinery):
+**Sexp landed on the compiler side.** Each event is one line,
 
-```ocaml
-type t =
-  { location        : string
-  ; function_type   : string
-  ; function_data   : string
-  ; argument_list   : (string * string) list }
+```
+(event (id N) (loc "File ...") (fn M.add)
+  (registry ((1 0x..) (2 0x..))) (snapshot <payload>))
 ```
 
-Getting there requires, in order:
+where `(registry ...)` is the live weak registry — every tracked-and-alive structure
+as an `(id current-address)` pair, captured by the same C walk as the nodes so an
+`(Address a)` inside the snapshot resolves against it exactly — and `<payload>` is
+`Vreplay.to_sexp` of the wire record (defined in `vreplay/sexp.ml`, re-exported by
+`Vreplay`):
 
-1. **Unblock serialization without sexplib** (Known broken #3) — either hand-write an
-   s-expression printer using only the compiler's own stdlib, or reuse
-   `Misc`/`Format`-based printing. Do not add an opam dependency to the compiler build.
-2. **Rewrite `dump_reader.ml` on the interface side** to parse sexp into
+```ocaml
+type t = { ds_type : Data_structure.t; root_node : node }
+type node = { virtual_address : nativeint
+            ; block : (string * block) list   (* Int/Float/String/... *)
+            ; children : node list }
+```
+
+`to_sexp`/`from_sexp` follow `[@@deriving sexp]` conventions — records as
+`((field value) ...)`, constructors as `(Name arg)` — so the interface can mirror the
+type definitions with ppx_sexp_conv and derive its reader. `Vreplay.from_sexp` +
+`Sexp.of_string` in this repo are the reference reader (exact inverses of the
+emitters). `module Wire` in the instrumentation now only supplies the `loc`/`fn`
+strings on the event wrapper.
+
+Remaining, in order:
+
+1. **Rewrite `dump_reader.ml` on the interface side** to parse the event lines into
    `Call.Info.t = { depth; function_info; location; arguments }`
    (`~/jsip-debugger-interface/lib/types/src/call.ml:3-10`). The interface has no sexp
    reader for this today.
-3. **Decide how depth is carried.** The line format encodes it in `{`/`}` deltas; a sexp
+2. **Decide how depth is carried.** The line format encodes it in `{`/`}` deltas; a sexp
    record has no equivalent, so depth must become an explicit field or stay as framing
    around each sexp. **Recommendation: make it an explicit field.** That is also the fix
    for the exception bug (Known broken #1) — if each record states its own depth, a dump
@@ -317,10 +344,11 @@ Getting there requires, in order:
 
 ### Mismatches to fix when you get there
 
-- `Wire.format_function_call` emits capitalized `"Function_name"` / `"Unnamed"`; the
-  parser only accepts lowercase.
-- The payload is still the hardcoded literal `"meow"` — blocked on the sexp problem
-  above.
+- `dump_reader.ml` still scans the old `FUNCTION(...) ARGUMENTS(...) LOCATION(...)`
+  line format; the compiler now emits the `(event ...)` sexp lines above. (The old
+  capitalized `Function_name` mismatch is moot — `function_type` is not on the wire.)
+- `Wire.argument_list` is computed but not emitted; arguments reach the wire only when
+  someone threads them into the event wrapper.
 
 Two mismatches that used to be listed here are **fixed**: `runtime/snapshot.c` no longer
 prefixes lines with `[wire] ` (it writes verbatim), and the markers no longer take a
