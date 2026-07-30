@@ -1,21 +1,44 @@
-(* Visual-replay runtime support (linked into the instrumented program). *)
+(* Visual-replay runtime support (linked into the instrumented program).
 
-(* Shape of one tracked object as returned by the C walker. *)
-type field =
-  | Cell of int          (* index of an internal cell within this same shape *)
-  | Edge of int          (* stable id of a separately-tracked object *)
-  | Ptr of nativeint     (* opaque / boundary pointer, address only *)
-  | Leaf of string       (* decoded scalar *)
+   The catalogue of walkable data structures -- the [Data_structure.t]
+   variant and its layouts (labels + mask) -- lives in data_structure.mli.
+   The wire schema and all sexp conversion live in sexp.mli; the types are
+   re-exported here (same types, not copies) so [Vreplay] presents the
+   whole contract.  See sexp.mli for the representation mapping and the
+   wire examples. *)
 
-type cell = { addr : nativeint; tag : int; size : int; fields : field array }
+type block = Sexp.block =
+  | Int of int
+  | Float of float
+  | String of string
+  | Int32 of int32
+  | Int64 of int64
+  | Nativeint of nativeint
+  | Float_array of float list
+  | Address of nativeint
 
-(* Per-data-structure layout, keyed by module name (e.g. "Map"). *)
-type ds_layout = { labels : string list; mask : int }
+type node = Sexp.node = {
+  virtual_address : nativeint;
+  block : (string * block) list;
+  children : node list;
+}
 
-(* Hand-authored table of the data structures we know how to walk. *)
-val ds_info : (string, ds_layout) Hashtbl.t
+(* What one event passes to the other program: the DS type stated once,
+   plus the walked shape. *)
+type t = Sexp.snapshot = {
+  ds_type : Data_structure.t;
+  root_node : node;
+}
 
-(* [snapshot ~loc ~fn ~ds root] assigns [root] a stable id (holding it weakly),
-   walks its in-memory shape, and prints one s-expression [event] to stdout.
+(* Aliases of [Sexp.to_sexp] / [Sexp.from_sexp]. *)
+val to_sexp : t -> Sexp.t
+val from_sexp : Sexp.t -> t
+
+(* [snapshot ~loc ~fn ~ds root] assigns [root] a stable id (holding it
+   weakly), has the C walker build the [node] tree for it, and emits one
+   line through [caml_wire_emit]:
+
+     (event (id 2) (loc "File ...") (fn Map.add) (snapshot <to_sexp>))
+
    No-ops when [ds] is not a known data structure or [root] is immediate. *)
 val snapshot : loc:string -> fn:string -> ds:string -> 'a -> unit

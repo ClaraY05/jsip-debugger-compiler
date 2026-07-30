@@ -1,6 +1,7 @@
 #include "caml/mlvalues.h"
 #include "caml/memory.h"
 #include "caml/alloc.h"
+#include "caml/custom.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,35 +10,50 @@
 /* ------------------------------------------------------------------ *
  * Visual-replay heap snapshot walker.
  *
- * OCaml side (see vreplay/vreplay.ml):
- *   type field = Cell of int        (* -> index of an internal cell in this shape *)
- *              | Edge of int        (* -> stable id of a separately-tracked object *)
- *              | Ptr  of nativeint  (* opaque / boundary pointer, address only     *)
- *              | Leaf of string     (* decoded scalar                              *)
- *   type cell  = { addr : nativeint; tag : int; size : int; fields : field array }
+ * OCaml side (see vreplay/sexp.ml, re-exported by vreplay.ml --
+ * constructor and field ORDER are the contract):
+ *   type block =
+ *     | Int of int | Float of float | String of string
+ *     | Int32 of int32 | Int64 of int64 | Nativeint of nativeint
+ *     | Float_array of float list | Address of nativeint
+ *   type node  = { virtual_address : nativeint
+ *                ; block : (string * block) list; children : node list }
  *   external traverse :
- *     (Obj.t * int) array -> Obj.t -> int -> cell array = "caml_wire_traverse"
+ *     Obj.t -> (Obj.t * int) array -> string array -> int -> node
+ *     = "caml_wire_traverse"
+ * The DS type itself stays on the OCaml side ([Vreplay.t] pairs it with
+ * the root node once); the walker doesn't need it.
  *
- * Given [known] (every currently-tracked object paired with its stable id), a
- * [root] to walk, and a pointer [mask] describing which fields of the data
- * structure's node/cell type are structural pointers to follow, we BFS the
- * in-memory representation reachable from [root] and return it as a flat array
- * of cells (index 0 is the root).  For each field we decide, per the rule:
+ * Given a [root] to walk, [known] (every currently-tracked
+ * object paired with its stable id, from the weak registry), and the DS's
+ * field [labels] + [mask] (which fields carry meaningful information: the
+ * child pointers and the key/value positions), we BFS the in-memory
+ * representation reachable from [root] and return it as a tree of [node]s,
+ * each node pointing at its children.  Unmasked fields are dropped.  A
+ * masked field becomes, per the rule:
  *
- *   - not a block            -> Leaf (decoded scalar)
- *   - block, in [known]      -> Edge id, STOP (walked at its own event)
- *   - block, no-scan tag     -> Leaf (string/float/opaque bytes)
- *   - block, mask bit set    -> Cell idx (an internal cell of this DS: recurse)
- *   - block, mask bit clear  -> Ptr addr (opaque/boundary pointer, don't follow)
+ *   - not a block            -> Int (unboxed int/char/bool/constant ctor)
+ *   - block, in [known]      -> Address, STOP (walked at its own events)
+ *   - block, no-scan tag     -> a leaf, decoded per the manual's
+ *                               "Representation of OCaml data types":
+ *                               Double_tag -> Float, String_tag -> String,
+ *                               Custom_tag -> Int32/Int64/Nativeint,
+ *                               Double_array_tag -> Float_array,
+ *                               anything else -> Address (opaque)
+ *   - block otherwise        -> a child node: BFS into it
+ *     (tuples, records and non-constant constructors land here -- they
+ *     are zero-tagged scannable blocks)
  *
- * GC discipline: the BFS allocates NO OCaml value, so nothing moves during the
- * walk and the raw [value]s cached in [seen] stay valid.  Everything the walk
- * records is plain C data (addresses, ids, decoded strings).  Only afterwards
- * do we build the OCaml result, and that build holds no walked [value]s, so it
- * cannot dangle anything and needs no root bookkeeping.
+ * GC discipline: the BFS allocates NO OCaml value, so nothing moves during
+ * the walk and the raw [value]s cached in [seen] stay valid.  Everything
+ * the walk records is plain C data (addresses, decoded leaves, label
+ * copies).  Only afterwards do we build the OCaml nodes, and that build
+ * holds no walked [value]s, so it cannot dangle anything.  A shared block
+ * is discovered once (one node, several parents); the OCaml printer copes
+ * with the resulting DAG.
  * ------------------------------------------------------------------ */
 
-/* ---- a tiny growable array of OCaml [value]s (BFS queue + visited set) ---- */
+/* ---- tiny growable array of OCaml [value]s: BFS queue + visited set ---- */
 typedef struct { value *data; size_t len, cap; } vec;
 
 static void vec_push(vec *v, value x)
@@ -51,7 +67,7 @@ static void vec_push(vec *v, value x)
 
 /* Discovery order in [seen] IS a cell's intra-snapshot index.  Linear scan;
  * fine for the modestly-sized internal representations we walk (a persistent
- * tree between tracked boundaries).  Swap for a pointer hash if it ever hurts. */
+ * tree between tracked boundaries).  Swap for a hash if it ever hurts. */
 static long vec_index_of(const vec *v, value x)
 {
     for (size_t i = 0; i < v->len; i++)
@@ -80,50 +96,163 @@ static long known_lookup(const known_ent *arr, size_t n, uintnat p)
     return -1;
 }
 
-/* Decode a leaf value into a freshly malloc'd C string (freed after the build).
- * Same cases as before: immediates, strings, boxed floats, else structural. */
-static char *describe_cstr(value v)
+/* Label for field [i]: the DS labels when this cell's size matches the label
+ * count (i.e. it IS the DS's internal node), else the field index -- masked
+ * value positions can lead into other block shapes (lists, tuples) whose
+ * fields the DS labels don't describe.  Copied to C during the walk so the
+ * result build can't be reading a string the GC just moved. */
+static char *label_for(value v_labels, mlsize_t nlabels, mlsize_t cell_size,
+                       mlsize_t i)
 {
-    char buf[256];
-    if (Is_long(v)) {
-        snprintf(buf, sizeof buf, "int:%ld", (long)Long_val(v));
-    } else {
-        tag_t tag = Tag_val(v);
-        if (tag == String_tag)
-            snprintf(buf, sizeof buf, "string:%s", String_val(v));
-        else if (tag == Double_tag)
-            snprintf(buf, sizeof buf, "float:%g", Double_val(v));
-        else
-            snprintf(buf, sizeof buf, "block(tag=%d,size=%lu)",
-                     (int)tag, (unsigned long)Wosize_val(v));
+    if (cell_size == nlabels && i < nlabels)
+        return strdup(String_val(Field(v_labels, i)));
+    else {
+        char buf[32];
+        snprintf(buf, sizeof buf, "%lu", (unsigned long)i);
+        return strdup(buf);
     }
-    return strdup(buf);
 }
 
-/* ---- C-side record of one cell, filled during the (non-allocating) walk ---- */
-enum fkind { F_CELL, F_EDGE, F_PTR, F_LEAF };
+/* ---- C-side record of one retained (masked) field ---- */
+enum fkind {
+    F_CHILD, F_INT, F_FLOAT, F_STRING, F_INT32, F_INT64,
+    F_NATIVEINT, F_FLOAT_ARRAY, F_ADDR
+};
 typedef struct {
     enum fkind k;
-    long   idx;   /* F_CELL / F_EDGE */
-    uintnat ptr;  /* F_PTR */
-    char  *leaf;  /* F_LEAF (owned) */
+    long     idx;    /* F_CHILD: index of the child cell */
+    intnat   ival;   /* F_INT */
+    double   dval;   /* F_FLOAT */
+    char    *sval;   /* F_STRING (owned; may contain NULs) */
+    size_t   slen;
+    int32_t  i32;    /* F_INT32 */
+    int64_t  i64;    /* F_INT64 */
+    intnat   inat;   /* F_NATIVEINT */
+    double  *farr;   /* F_FLOAT_ARRAY (owned) */
+    size_t   flen;
+    uintnat  ptr;    /* F_ADDR */
+    char    *label;  /* owned */
 } cfield;
 typedef struct {
     uintnat addr;
-    int     tag;
-    mlsize_t size;
-    cfield *fields;   /* owned; length nfields */
+    cfield *fields;    /* owned; only the masked fields, in field order */
     mlsize_t nfields;
 } ccell;
 
-/* external traverse : (Obj.t * int) array -> Obj.t -> int -> cell array
- *                   = "caml_wire_traverse" */
-CAMLprim value caml_wire_traverse(value v_known, value v_root, value v_mask)
+/* Decode one leaf (non-child, non-boundary) field into plain C data, per
+ * the manual's representation tables.  Runs during the walk: allocates no
+ * OCaml value.  Immediates -- int, char, bool, unit, constant
+ * constructors -- share one representation and all land in F_INT. */
+static void capture_leaf(cfield *fl, value f)
 {
-    CAMLparam3(v_known, v_root, v_mask);
-    CAMLlocal4(res, cellv, fldarr, boxed);
+    if (Is_long(f)) { fl->k = F_INT; fl->ival = Long_val(f); return; }
+    switch (Tag_val(f)) {
+    case Double_tag:
+        fl->k = F_FLOAT; fl->dval = Double_val(f); return;
+    case String_tag: {                     /* string and bytes alike */
+        mlsize_t len = caml_string_length(f);
+        fl->k = F_STRING;
+        fl->slen = len;
+        fl->sval = malloc(len ? len : 1);
+        memcpy(fl->sval, Bytes_val(f), len);
+        return;
+    }
+    case Double_array_tag: {               /* float array / float record */
+        mlsize_t n = Wosize_val(f) / Double_wosize;
+        fl->k = F_FLOAT_ARRAY;
+        fl->flen = n;
+        fl->farr = malloc(sizeof(double) * (n ? n : 1));
+        for (mlsize_t i = 0; i < n; i++)
+            fl->farr[i] = Double_flat_field(f, i);
+        return;
+    }
+    case Custom_tag: {
+        /* int32/int64/nativeint carry the runtime's own custom ops; their
+         * identifiers ("_i"/"_j"/"_n") are stable, they're the marshalling
+         * format's names for these types. */
+        const char *id = Custom_ops_val(f)->identifier;
+        if (strcmp(id, "_i") == 0) {
+            fl->k = F_INT32; fl->i32 = Int32_val(f); return;
+        }
+        if (strcmp(id, "_j") == 0) {
+            fl->k = F_INT64; fl->i64 = Int64_val(f); return;
+        }
+        if (strcmp(id, "_n") == 0) {
+            fl->k = F_NATIVEINT; fl->inat = Nativeint_val(f); return;
+        }
+        break;                             /* unknown custom: opaque */
+    }
+    default:
+        break;                             /* Abstract_tag etc.: opaque */
+    }
+    fl->k = F_ADDR;
+    fl->ptr = (uintnat)f;
+}
+
+/* Allocate the OCaml [block] value for one captured field.  Constructor
+ * numbering follows sexp.ml's declaration order: Int=0 Float=1 String=2
+ * Int32=3 Int64=4 Nativeint=5 Float_array=6 Address=7. */
+static value alloc_block(const cfield *fl)
+{
+    CAMLparam0();
+    CAMLlocal3(bx, lst, cell);
+    switch (fl->k) {
+    case F_INT:
+        bx = caml_alloc(1, 0);
+        Store_field(bx, 0, Val_long(fl->ival));
+        break;
+    case F_FLOAT:
+        bx = caml_alloc(1, 1);
+        Store_field(bx, 0, caml_copy_double(fl->dval));
+        break;
+    case F_STRING:
+        bx = caml_alloc(1, 2);
+        Store_field(bx, 0,
+                    caml_alloc_initialized_string(fl->slen, fl->sval));
+        break;
+    case F_INT32:
+        bx = caml_alloc(1, 3);
+        Store_field(bx, 0, caml_copy_int32(fl->i32));
+        break;
+    case F_INT64:
+        bx = caml_alloc(1, 4);
+        Store_field(bx, 0, caml_copy_int64(fl->i64));
+        break;
+    case F_NATIVEINT:
+        bx = caml_alloc(1, 5);
+        Store_field(bx, 0, caml_copy_nativeint(fl->inat));
+        break;
+    case F_FLOAT_ARRAY:
+        lst = Val_emptylist;
+        for (size_t i = fl->flen; i-- > 0; ) {
+            cell = caml_alloc(2, 0);
+            Store_field(cell, 0, caml_copy_double(fl->farr[i]));
+            Store_field(cell, 1, lst);
+            lst = cell;
+        }
+        bx = caml_alloc(1, 6);
+        Store_field(bx, 0, lst);
+        break;
+    default:                               /* F_ADDR */
+        bx = caml_alloc(1, 7);
+        Store_field(bx, 0, caml_copy_nativeint((intnat)fl->ptr));
+        break;
+    }
+    CAMLreturnT(value, bx);
+}
+
+/* external traverse :
+ *   Obj.t -> (Obj.t * int) array -> string array -> int -> node
+ *   = "caml_wire_traverse" */
+CAMLprim value caml_wire_traverse(value v_root, value v_known,
+                                  value v_labels, value v_mask)
+{
+    CAMLparam4(v_root, v_known, v_labels, v_mask);
+    CAMLlocal5(nodes, nodev, lst, ent, bx);
+    CAMLlocal1(cons);
 
     uintnat mask = (uintnat)Long_val(v_mask);
+    mlsize_t nlabels = Wosize_val(v_labels);
 
     /* Build the sorted pointer->id table from [known].  Reads raw pointers of
      * the known objects; no allocation, so they can't move. */
@@ -136,10 +265,25 @@ CAMLprim value caml_wire_traverse(value v_known, value v_root, value v_mask)
     }
     if (nk) qsort(known, nk, sizeof(known_ent), known_cmp);
 
-    /* An immediate root has no heap cell to walk: return [||]. */
+    /* An immediate root has no heap cell to walk.  Not reachable from
+     * vreplay.ml (it skips immediates); return a lone leaf node anyway
+     * rather than crash. */
     if (!Is_block(v_root)) {
+        cfield fl = {0};
+        capture_leaf(&fl, v_root);         /* immediate -> F_INT */
+        bx = alloc_block(&fl);
+        ent = caml_alloc(2, 0);            /* ("0", Int _) */
+        Store_field(ent, 0, caml_copy_string("0"));
+        Store_field(ent, 1, bx);
+        cons = caml_alloc(2, 0);
+        Store_field(cons, 0, ent);
+        Store_field(cons, 1, Val_emptylist);
+        nodev = caml_alloc(3, 0);
+        Store_field(nodev, 0, caml_copy_nativeint(0));
+        Store_field(nodev, 1, cons);
+        Store_field(nodev, 2, Val_emptylist);
         free(known);
-        CAMLreturn(Atom(0));
+        CAMLreturn(nodev);
     }
 
     /* ---- phase 1: BFS, no OCaml allocation ---- */
@@ -152,35 +296,38 @@ CAMLprim value caml_wire_traverse(value v_known, value v_root, value v_mask)
         value v = seen.data[head];
         ccell c;
         c.addr = (uintnat)v;
-        c.tag  = (int)Tag_val(v);
-        c.size = Wosize_val(v);
         c.fields = NULL;
         c.nfields = 0;
 
         if (Tag_val(v) < No_scan_tag) {
             mlsize_t n = Wosize_val(v);
-            c.nfields = n;
             c.fields = malloc(sizeof(cfield) * (n ? n : 1));
             for (mlsize_t i = 0; i < n; i++) {
+                if (!(i < sizeof(mask) * 8 && ((mask >> i) & 1u)))
+                    continue;                     /* unmasked: dropped */
                 value f = Field(v, i);
-                cfield fl;
+                cfield fl = {0};
+                fl.label = label_for(v_labels, nlabels, n, i);
                 if (!Is_block(f)) {
-                    fl.k = F_LEAF; fl.leaf = describe_cstr(f);
+                    capture_leaf(&fl, f);
                 } else {
                     long id = known_lookup(known, nk, (uintnat)f);
                     if (id >= 0) {
-                        fl.k = F_EDGE; fl.idx = id;
+                        fl.k = F_ADDR;            /* registry boundary */
+                        fl.ptr = (uintnat)f;
                     } else if (Tag_val(f) >= No_scan_tag) {
-                        fl.k = F_LEAF; fl.leaf = describe_cstr(f);
-                    } else if (i < sizeof(mask) * 8 && ((mask >> i) & 1u)) {
-                        long idx = vec_index_of(&seen, f);
-                        if (idx < 0) { idx = (long)seen.len; vec_push(&seen, f); }
-                        fl.k = F_CELL; fl.idx = idx;
+                        capture_leaf(&fl, f);
                     } else {
-                        fl.k = F_PTR; fl.ptr = (uintnat)f;
+                        long idx = vec_index_of(&seen, f);
+                        if (idx < 0) {
+                            idx = (long)seen.len;
+                            vec_push(&seen, f);
+                        }
+                        fl.k = F_CHILD;
+                        fl.idx = idx;
                     }
                 }
-                c.fields[i] = fl;
+                c.fields[c.nfields++] = fl;
             }
         }
 
@@ -191,46 +338,64 @@ CAMLprim value caml_wire_traverse(value v_known, value v_root, value v_mask)
         cells[ncells++] = c;
     }
 
-    /* ---- phase 2: build the OCaml result from pure C data (GC-safe) ---- */
-    res = caml_alloc(ncells, 0);
+    /* ---- phase 2: build the OCaml nodes from pure C data (GC-safe).
+     * Pass A allocates every node with children = [] into [nodes] (an OCaml
+     * array, so they stay rooted); pass B backpatches each children list
+     * with Store_field.  Child indices can point anywhere in [cells] (a
+     * shared block is discovered once), so patching after all nodes exist
+     * handles any DAG. ---- */
+    nodes = caml_alloc(ncells, 0);
     for (size_t i = 0; i < ncells; i++) {
         ccell *c = &cells[i];
-        fldarr = caml_alloc(c->nfields, 0);
-        for (mlsize_t j = 0; j < c->nfields; j++) {
+        /* block list, built back to front so it reads in field order */
+        lst = Val_emptylist;
+        for (mlsize_t j = c->nfields; j-- > 0; ) {
             cfield *fl = &c->fields[j];
-            switch (fl->k) {
-            case F_CELL:
-                boxed = caml_alloc(1, 0); Store_field(boxed, 0, Val_long(fl->idx)); break;
-            case F_EDGE:
-                boxed = caml_alloc(1, 1); Store_field(boxed, 0, Val_long(fl->idx)); break;
-            case F_PTR:
-                boxed = caml_alloc(1, 2);
-                Store_field(boxed, 0, caml_copy_nativeint((intnat)fl->ptr)); break;
-            default: /* F_LEAF */
-                boxed = caml_alloc(1, 3);
-                Store_field(boxed, 0, caml_copy_string(fl->leaf)); break;
-            }
-            Store_field(fldarr, j, boxed);
+            if (fl->k == F_CHILD) continue;
+            bx = alloc_block(fl);
+            ent = caml_alloc(2, 0);
+            Store_field(ent, 0, caml_copy_string(fl->label));
+            Store_field(ent, 1, bx);
+            cons = caml_alloc(2, 0);
+            Store_field(cons, 0, ent);
+            Store_field(cons, 1, lst);
+            lst = cons;
         }
-        cellv = caml_alloc(4, 0);
-        Store_field(cellv, 0, caml_copy_nativeint((intnat)c->addr));
-        Store_field(cellv, 1, Val_int(c->tag));
-        Store_field(cellv, 2, Val_int((int)c->size));
-        Store_field(cellv, 3, fldarr);
-        Store_field(res, i, cellv);
+        nodev = caml_alloc(3, 0);
+        Store_field(nodev, 0, caml_copy_nativeint((intnat)c->addr));
+        Store_field(nodev, 1, lst);               /* block */
+        Store_field(nodev, 2, Val_emptylist);     /* children: pass B */
+        Store_field(nodes, i, nodev);
+    }
+    for (size_t i = 0; i < ncells; i++) {
+        ccell *c = &cells[i];
+        lst = Val_emptylist;
+        for (mlsize_t j = c->nfields; j-- > 0; ) {
+            cfield *fl = &c->fields[j];
+            if (fl->k != F_CHILD) continue;
+            cons = caml_alloc(2, 0);
+            Store_field(cons, 0, Field(nodes, fl->idx));
+            Store_field(cons, 1, lst);
+            lst = cons;
+        }
+        Store_field(Field(nodes, i), 2, lst);
     }
 
     /* ---- cleanup ---- */
     for (size_t i = 0; i < ncells; i++) {
-        for (mlsize_t j = 0; j < cells[i].nfields; j++)
-            if (cells[i].fields[j].k == F_LEAF) free(cells[i].fields[j].leaf);
+        for (mlsize_t j = 0; j < cells[i].nfields; j++) {
+            cfield *fl = &cells[i].fields[j];
+            if (fl->k == F_STRING) free(fl->sval);
+            if (fl->k == F_FLOAT_ARRAY) free(fl->farr);
+            free(fl->label);
+        }
         free(cells[i].fields);
     }
     free(cells);
     free(seen.data);
     free(known);
 
-    CAMLreturn(res);
+    CAMLreturn(Field(nodes, 0));
 }
 
 /* ------------------------------------------------------------------ *

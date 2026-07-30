@@ -1,5 +1,6 @@
 (* A minimal s-expression AST with a sexplib-compatible printer and a
-   parser that inverts it.  No comment syntax; one sexp per string. *)
+   parser that inverts it, plus the wire schema and its converters.
+   No comment syntax; one sexp per string. *)
 
 type t =
   | Atom of string
@@ -110,3 +111,117 @@ let of_string s =
   skip_ws ();
   if !pos <> n then fail "trailing input";
   x
+
+(* ---- the wire schema ----
+   Constructor and field ORDER MUST match runtime/snapshot.c (block
+   constructors 0..7 and node fields 0..2 in declaration order).  See
+   sexp.mli for the representation mapping these constructors mirror. *)
+
+type block =
+  | Int of int
+  | Float of float
+  | String of string
+  | Int32 of int32
+  | Int64 of int64
+  | Nativeint of nativeint
+  | Float_array of float list
+  | Address of nativeint
+
+type node = {
+  virtual_address : nativeint;
+  block : (string * block) list;
+  children : node list;
+}
+
+type snapshot = {
+  ds_type : Data_structure.t;
+  root_node : node;
+}
+
+(* ---- converters ----
+   [to_sexp]/[from_sexp] follow the conventions [@@deriving sexp] would use
+   for these type definitions -- records as ((field value) ...) in
+   declaration order, constructors as (Name arg) -- so the interface repo
+   can mirror the types with ppx_sexp_conv and get its reader for free.
+   Addresses print as 0x... atoms, which [Nativeint.of_string] (and hence a
+   derived reader) accepts.  [from_sexp] is the exact inverse of [to_sexp];
+   it raises [Failure] on a sexp that doesn't have this shape. *)
+
+let hex (a : nativeint) = Printf.sprintf "0x%nx" a
+
+(* Shortest float rendering that still round-trips exactly: 15 significant
+   digits when they re-parse to the same double, the always-exact 17
+   otherwise.  [Float.of_string] (so a derived reader too) parses both. *)
+let fstr f =
+  let s = Printf.sprintf "%.15g" f in
+  if float_of_string s = f then s else Printf.sprintf "%.17g" f
+
+let sexp_of_block = function
+  | Int i -> List [ Atom "Int"; Atom (string_of_int i) ]
+  | Float f -> List [ Atom "Float"; Atom (fstr f) ]
+  | String s -> List [ Atom "String"; Atom s ]
+  | Int32 i -> List [ Atom "Int32"; Atom (Int32.to_string i) ]
+  | Int64 i -> List [ Atom "Int64"; Atom (Int64.to_string i) ]
+  | Nativeint i -> List [ Atom "Nativeint"; Atom (Nativeint.to_string i) ]
+  | Float_array fs ->
+    List [ Atom "Float_array"; List (List.map (fun f -> Atom (fstr f)) fs) ]
+  | Address a -> List [ Atom "Address"; Atom (hex a) ]
+
+let block_from_sexp = function
+  | List [ Atom "Int"; Atom s ] -> Int (int_of_string s)
+  | List [ Atom "Float"; Atom s ] -> Float (float_of_string s)
+  | List [ Atom "String"; Atom s ] -> String s
+  | List [ Atom "Int32"; Atom s ] -> Int32 (Int32.of_string s)
+  | List [ Atom "Int64"; Atom s ] -> Int64 (Int64.of_string s)
+  | List [ Atom "Nativeint"; Atom s ] -> Nativeint (Nativeint.of_string s)
+  | List [ Atom "Float_array"; List fs ] ->
+    let flt = function
+      | Atom s -> float_of_string s
+      | List _ -> failwith "Sexp.from_sexp: bad float"
+    in
+    Float_array (List.map flt fs)
+  | List [ Atom "Address"; Atom a ] -> Address (Nativeint.of_string a)
+  | _ -> failwith "Sexp.from_sexp: bad block"
+
+let sexp_of_entry (lbl, b) = List [ Atom lbl; sexp_of_block b ]
+
+let entry_from_sexp = function
+  | List [ Atom lbl; b ] -> (lbl, block_from_sexp b)
+  | _ -> failwith "Sexp.from_sexp: bad block entry"
+
+(* [seen] guards against a heap cycle surviving the walker's sharing dedup
+   (two parents, one node value here): a revisited node is emitted with its
+   data but no children, so the printer terminates and a reader can rejoin
+   it by address. *)
+let rec sexp_of_node seen n =
+  let revisit = List.memq n !seen in
+  if not revisit then seen := n :: !seen;
+  let kids = if revisit then [] else n.children in
+  List
+    [ List [ Atom "virtual_address"; Atom (hex n.virtual_address) ]
+    ; List [ Atom "block"; List (List.map sexp_of_entry n.block) ]
+    ; List [ Atom "children"; List (List.map (sexp_of_node seen) kids) ] ]
+
+let rec node_from_sexp = function
+  | List
+      [ List [ Atom "virtual_address"; Atom a ]
+      ; List [ Atom "block"; List entries ]
+      ; List [ Atom "children"; List kids ] ] ->
+    { virtual_address = Nativeint.of_string a
+    ; block = List.map entry_from_sexp entries
+    ; children = List.map node_from_sexp kids }
+  | _ -> failwith "Sexp.from_sexp: bad node"
+
+let to_sexp { ds_type; root_node } =
+  List
+    [ List [ Atom "ds_type"; Atom (Data_structure.to_string ds_type) ]
+    ; List [ Atom "root_node"; sexp_of_node (ref []) root_node ] ]
+
+let from_sexp = function
+  | List
+      [ List [ Atom "ds_type"; Atom ds ]
+      ; List [ Atom "root_node"; root ] ] ->
+    (match Data_structure.of_module ds with
+     | Some ds_type -> { ds_type; root_node = node_from_sexp root }
+     | None -> failwith "Sexp.from_sexp: unknown ds_type")
+  | _ -> failwith "Sexp.from_sexp: bad record"

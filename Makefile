@@ -862,12 +862,28 @@ endif
 VREPLAY_OCAMLC = $(NEW_OCAMLRUN) ./ocamlc -nostdlib -I stdlib -I vreplay
 .PHONY: vreplay
 vreplay: vreplay/vreplay.cma
-vreplay/vreplay.cmi: vreplay/vreplay.mli ocamlc stdlib/stdlib.cma
+vreplay/data_structure.cmi: vreplay/data_structure.mli ocamlc \
+    stdlib/stdlib.cma
 	$(VREPLAY_OCAMLC) -c $<
-vreplay/vreplay.cmo: vreplay/vreplay.ml vreplay/vreplay.cmi ocamlc
+vreplay/data_structure.cmo: vreplay/data_structure.ml \
+    vreplay/data_structure.cmi ocamlc
+	$(VREPLAY_OCAMLC) -c vreplay/data_structure.ml
+vreplay/sexp.cmi: vreplay/sexp.mli vreplay/data_structure.cmi ocamlc \
+    stdlib/stdlib.cma
+	$(VREPLAY_OCAMLC) -c $<
+vreplay/sexp.cmo: vreplay/sexp.ml vreplay/sexp.cmi \
+    vreplay/data_structure.cmi ocamlc
+	$(VREPLAY_OCAMLC) -c vreplay/sexp.ml
+vreplay/vreplay.cmi: vreplay/vreplay.mli vreplay/data_structure.cmi \
+    vreplay/sexp.cmi ocamlc stdlib/stdlib.cma
+	$(VREPLAY_OCAMLC) -c $<
+vreplay/vreplay.cmo: vreplay/vreplay.ml vreplay/vreplay.cmi \
+    vreplay/data_structure.cmi vreplay/sexp.cmi ocamlc
 	$(VREPLAY_OCAMLC) -c vreplay/vreplay.ml
-vreplay/vreplay.cma: vreplay/vreplay.cmo ocamlc
-	$(VREPLAY_OCAMLC) -a -o $@ vreplay/vreplay.cmo
+vreplay/vreplay.cma: vreplay/data_structure.cmo vreplay/sexp.cmo \
+    vreplay/vreplay.cmo ocamlc
+	$(VREPLAY_OCAMLC) -a -o $@ vreplay/data_structure.cmo \
+	    vreplay/sexp.cmo vreplay/vreplay.cmo
 
 # Bootstrap and rebuild the whole system.
 # The compilation of ocaml will fail if the runtime has changed.
