@@ -225,10 +225,41 @@ let sexp_of_registry reg =
      |> List.map (fun (id, addr) ->
           List [ Atom (string_of_int id); Atom (hex addr) ]))
 
-(* Event-level: the call's arguments as (label-kind, source-text) pairs,
-   computed at compile time by the instrumentation. *)
+(* Event-level: the call site, in the shape [@@deriving sexp] gives the
+   interface's Location.t record
+   {file_path : string; line_number : int; char_range : int * int}. *)
+let sexp_of_loc (file, line, char_start, char_end) =
+  List
+    [ List [ Atom "file_path"; Atom file ]
+    ; List [ Atom "line_number"; Atom (string_of_int line) ]
+    ; List
+        [ Atom "char_range"
+        ; List
+            [ Atom (string_of_int char_start)
+            ; Atom (string_of_int char_end) ] ] ]
+
+(* Event-level: the called function as the interface's Function_info.t
+   variant -- (Function_name M.add) or (Unnamed "fun x -> ...").  The
+   constructor is decided at compile time by the instrumentation. *)
+let sexp_of_fn (kind, text) = List [ Atom kind; Atom text ]
+
+(* Event-level: the call's arguments as the interface's Argument.t
+   variants -- (constructor, label, source-text) triples computed at
+   compile time, rendered as (No_label (expression (Unnamed m))) or
+   (Labelled (label k) (expression (Unnamed v))).  The label is empty
+   and unused for No_label. *)
 let sexp_of_args args =
-  List (List.map (fun (k, v) -> List [ Atom k; Atom v ]) args)
+  let expression text =
+    List [ Atom "expression"; List [ Atom "Unnamed"; Atom text ] ]
+  in
+  let argument (kind, label, text) =
+    match kind with
+    | "No_label" -> List [ Atom kind; expression text ]
+    | _ ->
+      List
+        [ Atom kind; List [ Atom "label"; Atom label ]; expression text ]
+  in
+  List (List.map argument args)
 
 let to_sexp { ds_type; root_node } =
   List

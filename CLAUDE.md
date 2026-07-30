@@ -146,14 +146,18 @@ entries the GC collected; addresses captured by the same walk as the nodes), and
 walked shape:
 
 ```
-{(event (id 1) (loc "File \"/tmp/t.ml\", line 4, characters 10-23") (fn M.add)
-   (args ((NO_LABEL "\"a\"") (NO_LABEL 1) (NO_LABEL m)))
+{(event (id 1)
+   (loc ((file_path /tmp/t.ml) (line_number 4) (char_range (10 23))))
+   (fn (Function_name M.add))
+   (args ((No_label (expression (Unnamed "\"a\"")))
+          (No_label (expression (Unnamed 1)))
+          (No_label (expression (Unnamed m)))))
    (registry ((1 0x7f...)))
    (snapshot ((ds_type Map) (root_node ((virtual_address 0x7f...)
      (block ((l (Int 0)) (v (String a)) (d (Int 1)) (r (Int 0))))
      (children ()))))))
 }{(event (id 2) ... (registry ((1 0x7f...) (2 0x7f...))) ...)
-}{(event (id 3) ... (fn M.remove) ...)
+}{(event (id 3) ... (fn (Function_name M.remove)) ...)
 }
 ```
 
@@ -210,10 +214,11 @@ corrupts the user program's backtraces).
 the wire schema, and `to_sexp`/`from_sexp` (following `[@@deriving sexp]` conventions,
 so the interface repo can mirror the type definitions with ppx_sexp_conv and derive its
 reader). The payload each event emits is real — `placeholder_record`/`meow` are gone.
-One residue: the `[@@deriving sexp]` on `Wire.t` is still *silently ignored* (no ppx in
-the compiler build; never rely on it). `Wire.argument_list` **is now on the wire** — an
-`(args ((<label-kind> <source-text>) ...))` field on the event wrapper, threaded through
-`Vreplay.snapshot ~args` as a literal `(string * string) list`.
+The stale `[@@deriving sexp]` on `Wire.t` is gone (there is still no ppx in the compiler
+build; never add code that relies on one). `Wire`'s fields are now *structured* — `loc`
+as `Location.t` components, `fn`/`args` tagged with the interface's constructor names —
+threaded through `Vreplay.snapshot` as literal tuples/lists of string and int constants
+and rendered by `Sexp.sexp_of_loc/fn/args` in the interface's own type shapes.
 
 Note `instrument_call` (formerly `inject_then_run_node`) takes `?inject_before` and
 `?inject_after` as closures producing **arbitrary already-typed expressions** and knows
@@ -310,9 +315,18 @@ Reference fixture: `~/jsip-debugger-interface/app/bin/dummy.txt`.
 **Sexp landed on the compiler side.** Each event is one line,
 
 ```
-(event (id N) (loc "File ...") (fn M.add)
+(event (id N)
+  (loc ((file_path t.ml) (line_number 4) (char_range (10 23))))
+  (fn (Function_name M.add))
+  (args ((No_label (expression (Unnamed m))) ...))
   (registry ((1 0x..) (2 0x..))) (snapshot <payload>))
 ```
+
+where `loc`/`fn`/`args` are rendered in the shapes `[@@deriving sexp]`
+gives the *interface repo's own types* (`Location.t`, `Function_info.t`,
+`Argument.t` in `~/jsip-debugger-interface/lib/types`), so its reader is
+derived, not hand-written (see `Sexp.sexp_of_loc/fn/args` in
+`vreplay/sexp.mli`),
 
 where `(registry ...)` is the live weak registry — every tracked-and-alive structure
 as an `(id current-address)` pair, captured by the same C walk as the nodes so an
@@ -334,26 +348,23 @@ type definitions with ppx_sexp_conv and derive its reader. `Vreplay.from_sexp` +
 emitters). `module Wire` in the instrumentation now only supplies the `loc`/`fn`/`args`
 strings on the event wrapper.
 
-Remaining, in order:
+**The interface reader is rewritten and in sync** (branch `parsing`):
+`Dump_wire` mirrors the event wrapper with a derived reader
+(`[@sexp.allow_extra_fields]`, so *adding* wrapper fields here won't break
+it), and `dump_reader.ml` keeps only the `{`/`}` depth framing — no string
+parsing remains on either side. Test fixtures live in its
+`lib/parsing/test/test_parse.ml` and `app/bin/dummy.txt`; regenerate them
+from a real dump after any deliberate format change.
 
-1. **Rewrite `dump_reader.ml` on the interface side** to parse the event lines into
-   `Call.Info.t = { depth; function_info; location; arguments }`
-   (`~/jsip-debugger-interface/lib/types/src/call.ml:3-10`). The interface has no sexp
-   reader for this today.
-2. **Decide how depth is carried.** The line format encodes it in `{`/`}` deltas; a sexp
+Remaining:
+
+1. **Decide how depth is carried.** The line format encodes it in `{`/`}` deltas; a sexp
    record has no equivalent, so depth must become an explicit field or stay as framing
    around each sexp. **Recommendation: make it an explicit field.** That is also the fix
    for the exception bug (Known broken #1) — if each record states its own depth, a dump
    truncated by an unwind is still well formed, an unwind is just the next record's depth
    jumping backwards, and there is nothing to emit on the raising path at all. See
    `REVIEW_FINDINGS.md` #3.
-
-### Mismatches to fix when you get there
-
-- `dump_reader.ml` still scans the old `FUNCTION(...) ARGUMENTS(...) LOCATION(...)`
-  line format; the compiler now emits the `(event ...)` sexp lines above. (The old
-  capitalized `Function_name` mismatch is moot — `function_type` is not on the wire.
-  `argument_list` **is** now on the wire, as the `(args ...)` field.)
 
 Two mismatches that used to be listed here are **fixed**: `runtime/snapshot.c` no longer
 prefixes lines with `[wire] ` (it writes verbatim), and the markers no longer take a

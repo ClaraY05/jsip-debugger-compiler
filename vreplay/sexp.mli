@@ -97,9 +97,19 @@ val from_sexp : t -> snapshot
    disappear once the GC has collected it. *)
 val sexp_of_registry : (int * nativeint) array -> t
 
-(* The call's arguments as (label-kind, source-text) pairs -- label-kind
-   is NO_LABEL / LABELLED:<l> / OPTIONAL:<l>, and the text of an argument
-   the application was abstracted over is OMITTED.  Rendered as
-   ((kind text) ...), the shape [@@deriving sexp] gives
-   [(string * string) list]. *)
-val sexp_of_args : (string * string) list -> t
+(* The remaining event-wrapper fields, rendered in the shapes
+   [@@deriving sexp] gives the interface repo's own types so its reader
+   is derived, not hand-written:
+
+     loc   ((file_path t.ml) (line_number 4) (char_range (10 23)))
+     fn    (Function_name M.add)  or  (Unnamed "fun x -> ...")
+     args  ((No_label (expression (Unnamed m)))
+            (Labelled (label init) (expression (Unnamed 0))))
+
+   The fn/argument constructor names are computed at compile time by the
+   instrumentation (an argument's label is empty and unused for
+   No_label); the source text of an argument the application was
+   abstracted over is OMITTED. *)
+val sexp_of_loc : string * int * int * int -> t
+val sexp_of_fn : string * string -> t
+val sexp_of_args : (string * string * string) list -> t
