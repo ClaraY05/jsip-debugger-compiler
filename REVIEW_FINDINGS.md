@@ -259,7 +259,7 @@ registry; until that C entry point lands it emits a `ROOT\n` placeholder
 line.
 
 Phase 2 (mutable structures) is in as well: `ds_table` also lists
-`Stdlib__Hashtbl`/`Queue`/`Stack`/`Buffer` as `Mutable`, and `classify`
+`Stdlib__Hashtbl`/`Queue`/`Stack` as `Mutable`, and `classify`
 roots those events at the first structure-typed argument
 (`Argument i`), read post-call so the hook sees the post-state. A call
 returning the structure still roots at the result, which covers mutable
