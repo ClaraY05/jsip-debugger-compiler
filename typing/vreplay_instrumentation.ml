@@ -240,8 +240,17 @@ let inject_then_run_node (exp : Typedtree.expression)
       , res_val_desc)
   ))))))))
 
+(* An event is an application through a known data-structure module
+   (vreplay/README.md).  MUST mirror [Vreplay.ds_of_module] in
+   vreplay/vreplay.ml: a module missing here is never instrumented, while
+   one listed here that Vreplay doesn't know is only a runtime no-op. *)
+let known_ds = [ "Map"; "Set" ]
+
 (* Returns true if an event has occurred based on the function expression *)
-let filter_func (_func : Typedtree.expression) = true
+let filter_func (func : Typedtree.expression) =
+  match ds_module func with
+  | Some m -> List.mem m known_ds
+  | None -> false
 
 (* This is our special mapper that changes pexp_applies where an event occurs*)
 let inject_mapper (wire_emit : Typedtree.primitive_description) =
