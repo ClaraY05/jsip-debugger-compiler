@@ -26,7 +26,7 @@ external traverse : (Obj.t * int) array -> Obj.t -> int -> cell array
 type ds_layout = { labels : string list; mask : int }
 
 let ds_info : (string, ds_layout) Hashtbl.t = Hashtbl.create 16
-
+(*CR: replace the ds+info with a variant record type of Map, Set, etc.*)
 let () =
   (* stdlib Map: internal node is  Node {l; v; d; r; h}  (Empty is the int 0).
      Structural pointers are l (bit 0) and r (bit 3). *)
