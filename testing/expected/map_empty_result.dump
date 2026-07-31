@@ -1,0 +1,2 @@
+{(event (id 1) (loc ((file_path testing/cases/map_empty_result.ml) (line_number 10) (char_range (10 32)))) (fn (Function_name M.add)) (args ((No_label (expression (Unnamed "\"only\""))) (No_label (expression (Unnamed 1))) (No_label (expression (Unnamed M.empty))))) (registry ((1 0x77f3a77f19c0))) (snapshot ((ds_type Map) (root_node ((virtual_address 0x77f3a77f19c0) (block ((l (Int 0)) (v (String only)) (d (Int 1)) (r (Int 0)))) (children ()))))))
+}{}

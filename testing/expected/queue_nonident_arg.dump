@@ -1,0 +1,2 @@
+{(event (id 1) (loc ((file_path testing/cases/queue_nonident_arg.ml) (line_number 7) (char_range (13 28)))) (fn (Function_name Queue.create)) (args ((No_label (expression (Unnamed "()"))))) (registry ((1 0x748cd1df2200))) (snapshot ((ds_type Queue) (root_node ((virtual_address 0x748cd1df2200) (block ((length (Int 0)) (first (Int 0)))) (children ()))))))
+}
