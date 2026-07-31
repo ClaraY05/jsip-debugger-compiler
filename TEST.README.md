@@ -78,7 +78,7 @@ depth -1), shaped like:
    (loc "File \"/tmp/t.ml\", line 4, characters 10-23")
    (fn M.add)
    (args ((NO_LABEL "\"a\"") (NO_LABEL 1) (NO_LABEL m)))
-   (registry ((1 0x7f...)))
+   (registry ((1 0x7f... m)))
    (snapshot ((ds_type Map)
      (root_node ((virtual_address 0x7f...)
        (block ((l (Int 0)) (v (String a)) (d (Int 1)) (r (Int 0))))
@@ -94,12 +94,17 @@ Field guide:
 - `args` -- the call's arguments as (label-kind, source-text) pairs,
   computed at compile time: NO_LABEL / LABELLED:l / OPTIONAL:l, and
   OMITTED for an argument the application was abstracted over.
-- `registry` -- every tracked-and-alive structure as `(id address)` pairs;
-  grows as structures are tracked, drops GC-collected entries. It is
-  the single source of memory locations for tracked structures: a
-  nested tracked structure appears in a snapshot as `(Id i)`, resolved
-  by indexing this registry. Addresses come from the same C walk as
-  the nodes.
+- `registry` -- every tracked-and-alive structure as an `(id address)`
+  or `(id address name)` entry; grows as structures are tracked, drops
+  GC-collected entries. The optional `name` is the identifier the
+  structure was last observed under -- the `let` binder when the call
+  is exactly the RHS of a `let`, or a mutated container argument's own
+  identifier; the latest non-empty name wins, so an entry can rename
+  between events, and it is absent while the structure is anonymous.
+  It is the single source of memory locations for tracked structures:
+  a nested tracked structure appears in a snapshot as `(Id i)`,
+  resolved by indexing this registry. Addresses come from the same C
+  walk as the nodes.
 - `snapshot` -- `Vreplay.to_sexp` of `{ ds_type; root_node }`, the walked
   in-memory shape (`l`/`v`/`d`/`r` here are the Map's AVL node fields:
   left, value, data, right -- per the `Data_structure` catalogue).

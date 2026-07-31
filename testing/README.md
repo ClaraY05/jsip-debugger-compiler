@@ -26,7 +26,8 @@ ways:
    stored files) canonicalizes both sides identically -- each distinct
    address becomes `0xA<n>` by first appearance -- making the check
    "equal up to a consistent address bijection".  Everything else
-   (ids, locs, args, shapes, registry linkage) must match exactly.
+   (ids, locs, args, shapes, registry linkage and names) must match
+   exactly.
 
 After changing the wire format deliberately, re-run with `--promote`
 and review the diff of `expected/` like any other code change.

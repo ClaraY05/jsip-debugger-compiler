@@ -216,14 +216,19 @@ let rec node_from_sexp = function
   | _ -> failwith "Sexp.from_sexp: bad node"
 
 (* Event-level: the live weak registry at event time, as (id, current
-   address) pairs.  Ids are stable across events; the addresses are
-   captured by the same C walk as the nodes, so an [Address a] in the
-   snapshot resolves against this event's registry exactly. *)
+   address, name) triples.  Ids are stable across events; the addresses
+   are captured by the same C walk as the nodes, so an [Address a] in the
+   snapshot resolves against this event's registry exactly.  The name --
+   the latest identifier the structure was observed under -- is omitted
+   while empty, so an anonymous entry keeps the historic two-atom
+   shape. *)
 let sexp_of_registry reg =
-  List
-    (Array.to_list reg
-     |> List.map (fun (id, addr) ->
-          List [ Atom (string_of_int id); Atom (hex addr) ]))
+  let entry (id, addr, name) =
+    let base = [ Atom (string_of_int id); Atom (hex addr) ] in
+    if String.equal name "" then List base
+    else List (base @ [ Atom name ])
+  in
+  List (Array.to_list reg |> List.map entry)
 
 (* Event-level: the call site, in the shape [@@deriving sexp] gives the
    interface's Location.t record
