@@ -99,14 +99,15 @@ type root = Result | Argument of int
    each with the name the runtime catalogue knows it by and its
    mutability.  The names MUST mirror [Data_structure.of_module] in
    vreplay/data_structure.ml; only units the catalogue can walk are
-   listed (Hashtbl/Stack wait on their layouts, so their events would
-   no-op -- markers with no record).  [list]/[array] are predef-typed,
-   not declared in their unit; they need their own rule and are not
+   listed (Stack waits on its layout, so its events would no-op --
+   markers with no record).  [list]/[array] are predef-typed, not
+   declared in their unit; they need their own rule and are not
    covered. *)
 let ds_table : (string * (string * mutability)) list =
   [ "Stdlib__Map", ("Map", Immutable)
   ; "Stdlib__Set", ("Set", Immutable)
-  ; "Stdlib__Queue", ("Queue", Mutable) ]
+  ; "Stdlib__Queue", ("Queue", Mutable)
+  ; "Stdlib__Hashtbl", ("Hashtbl", Mutable) ]
 
 (* declaring unit of a uid. [Subst] copies uids verbatim, so [Item]
    survives [Map.Make], [include], [open] and aliasing.
@@ -137,29 +138,38 @@ let is_partial (e : Typedtree.expression) =
   | Types.Tarrow _ -> true
   | _ -> false
 
-(* a mutable call's root: its first structure-typed argument. only an
-   ident is safe to re-read post-call; otherwise skip the event. *)
-let argument_root comp_unit args =
-  let rec find i = function
-    | [] -> None
-    | (_, Typedtree.Omitted ()) :: rest -> find (i + 1) rest
+(* a mutable call's argument roots: every structure-typed argument that
+   is a plain ident, in argument order -- only an ident is safe to
+   re-read post-call.  A structure argument that is a bigger expression
+   is skipped, not fatal (its value's own events cover it).  Deduped by
+   path, first occurrence kept, so an argument passed twice is observed
+   once. *)
+let argument_roots comp_unit args =
+  let rec collect i seen = function
+    | [] -> []
+    | (_, Typedtree.Omitted ()) :: rest -> collect (i + 1) seen rest
     | (_, Typedtree.Arg (a : Typedtree.expression)) :: rest ->
-      if not (is_structure comp_unit a) then find (i + 1) rest
-      else begin match a.exp_desc with
-      | Texp_ident _ -> Some (Argument i)
-      | _ -> None
+      begin match a.exp_desc with
+      | Texp_ident (path, _, _)
+        when is_structure comp_unit a
+             && not (List.exists (Path.same path) seen) ->
+        Argument i :: collect (i + 1) (path :: seen) rest
+      | _ -> collect (i + 1) seen rest
       end
   in
-  find 0 args
+  collect 0 [] args
 
 (* is the application [exp] (function [func], arguments [args]) an
-   event, and where is its root? returning the structure roots at the
-   result: immutable manipulation plus mutable creators. any other
-   total mutable-module call roots at its structure argument -- reads
-   included, since types cannot tell [iter] from [remove] and [pop]
-   does not return [unit]; re-observing beats missing a mutation. *)
+   event, and where are its roots?  An immutable-module call observes
+   the structure it RETURNS.  A total mutable-module call observes every
+   structure-typed ident argument -- post-call, so mutations are seen at
+   the container ([add]'s queue, both of [transfer]'s); reads re-observe
+   too, since types cannot tell [iter] from [remove] -- and the result
+   as well when it is itself a structure ([create], [copy], [pop] on a
+   container of containers).  Containers first, result last, one record
+   each inside the call's single frame. *)
 let classify (exp : Typedtree.expression)
-      (func : Typedtree.expression) args : (string * root) option =
+      (func : Typedtree.expression) args : (string * root list) option =
   match func.exp_desc with
   | Texp_ident (_, _, vd) ->
     begin match uid_comp_unit vd.val_uid with
@@ -168,12 +178,15 @@ let classify (exp : Typedtree.expression)
       begin match List.assoc_opt comp_unit ds_table with
       | None -> None
       | Some (ds, Immutable) ->
-        if is_structure comp_unit exp then Some (ds, Result) else None
+        if is_structure comp_unit exp then Some (ds, [ Result ]) else None
       | Some (ds, Mutable) ->
-        if is_structure comp_unit exp then Some (ds, Result)
-        else if is_partial exp then None
-        else
-          Option.map (fun r -> (ds, r)) (argument_root comp_unit args)
+        if is_partial exp then None
+        else begin
+          let result = if is_structure comp_unit exp then [ Result ] else [] in
+          match argument_roots comp_unit args @ result with
+          | [] -> None
+          | roots -> Some (ds, roots)
+        end
       end
     end
   | _ -> None
@@ -182,8 +195,8 @@ let classify (exp : Typedtree.expression)
 
 (* Build and type [Vreplay.snapshot ~loc ~fn ~ds ~args <root>] in [env].
    [root] is always a plain identifier -- [__vreplay_res] or a mutated
-   argument ([argument_root] only accepts idents) -- so typing it in the
-   post-call env resolves to the value in scope there.  [loc], [fn] and
+   argument ([argument_roots] only accepts idents) -- so typing it in
+   the post-call env resolves to the value in scope there.  [loc], [fn] and
    [args] become literal tuples/lists of string and int constants in
    [Wire.t]'s shapes.  [Vreplay] is resolved by ordinary name resolution
    against the instrumented unit's load path ("+vreplay",
@@ -230,23 +243,23 @@ let snapshot_call env ~loc ~fn ~ds ~args ~root =
        ; (Asttypes.Nolabel, Ast_helper.Exp.ident (Location.mknoloc root)) ])
 
 (* the identifier the post-call hook reads: the bound result, or the
-   mutated argument (an ident, per [argument_root]) *)
+   mutated argument (an ident, per [argument_roots]) *)
 let root_lid args = function
   | Result -> Longident.Lident res_binder_name
   | Argument i ->
     begin match List.nth args i with
     | (_, Typedtree.Arg
            { Typedtree.exp_desc = Texp_ident (_, lid, _); _ }) -> lid.txt
-    | _ -> assert false  (* [argument_root] only returns ident positions *)
+    | _ -> assert false (* [argument_roots] only returns ident positions *)
     end
 
 (* ---- code generation ---- *)
 
 (* wrap [exp] (a Texp_apply) in frame markers, optionally running
-   [inject_before] ahead of the call and [inject_after] after it, with
-   the result bound to [res_binder_name]; a raising call skips
-   everything after itself.  returns an exp_desc. *)
-let instrument_call ?inject_before ?inject_after
+   [inject_before] ahead of the call and each [inject_after] hook (in
+   list order) after it, with the result bound to [res_binder_name]; a
+   raising call skips everything after itself.  returns an exp_desc. *)
+let instrument_call ?inject_before ~inject_after
       (exp : Typedtree.expression)
       ~(emit : Env.t -> string -> Typedtree.expression) =
   let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ()) in
@@ -297,10 +310,12 @@ let instrument_call ?inject_before ?inject_after
         , res_val_desc))
   in
   let tail = seq env_with_res (emit env_with_res frame_close) tail in
+  (* fold_right keeps list order at runtime: the first hook's seq ends
+     up outermost, so it runs first *)
   let tail =
-    match inject_after with
-    | None -> tail
-    | Some hook -> seq env_with_res (hook env_with_res) tail
+    List.fold_right
+      (fun hook tail -> seq env_with_res (hook env_with_res) tail)
+      inject_after tail
   in
   let tail =
     mk env_with_res exp.exp_type (Typedtree.Texp_let
@@ -341,16 +356,20 @@ let inject_mapper (emit_prim : Typedtree.primitive_description) =
     | Texp_apply (func, args) ->
       begin match classify exp func args with
       | None -> recurse_down
-      | Some (ds, root) ->
+      | Some (ds, roots) ->
         let wire = Wire.format_function_call exp func args in
-        let root = root_lid args root in
+        let hooks =
+          List.map
+            (fun root ->
+               let root = root_lid args root in
+               fun env ->
+                 snapshot_call env ~loc:wire.Wire.location
+                   ~fn:wire.Wire.function_info ~ds
+                   ~args:wire.Wire.argument_list ~root)
+            roots
+        in
         { exp with
-          exp_desc =
-            instrument_call recurse_down ~emit
-              ~inject_after:(fun env ->
-                snapshot_call env ~loc:wire.Wire.location
-                  ~fn:wire.Wire.function_info ~ds
-                  ~args:wire.Wire.argument_list ~root) }
+          exp_desc = instrument_call recurse_down ~emit ~inject_after:hooks }
       end
     | _ -> recurse_down
   in

@@ -49,7 +49,13 @@ val from_sexp : Sexp.t -> t
    [loc], [fn] and [args] are computed at compile time and rendered in
    the interface repo's own type shapes (see Sexp.sexp_of_loc/fn/args).
    No-ops when [ds] is not a known data structure or [root] is
-   immediate. *)
+   immediate.
+
+   One CALL can carry several observations: the instrumentation injects
+   one [snapshot] -- one record -- per root (each mutated container
+   argument, then a structure result), all inside the call's single
+   {} frame.  A reader must accept several records between one pair of
+   markers; they share loc/fn/args and differ in root. *)
 val snapshot :
   loc:string * int * int * int -> fn:string * string -> ds:string
   -> args:(string * string * string) list
