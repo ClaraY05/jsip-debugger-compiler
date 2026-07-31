@@ -1,10 +1,12 @@
 (* The catalogue of data structures visual replay knows how to walk. *)
 
-(* Constructor ORDER is part of the C walker's contract --
-   runtime/snapshot.c stores this value verbatim into each wire node. *)
-type t = Map | Set | Queue
+type t = Map | Set | Queue | Hashtbl
 
-let to_string = function Map -> "Map" | Set -> "Set" | Queue -> "Queue"
+let to_string = function
+  | Map -> "Map"
+  | Set -> "Set"
+  | Queue -> "Queue"
+  | Hashtbl -> "Hashtbl"
 
 (* The DS name the instrumentation passes at each event ([ds_table] in
    typing/vreplay_instrumentation.ml -- it may list units that have no
@@ -13,26 +15,67 @@ let of_module = function
   | "Map" -> Some Map
   | "Set" -> Some Set
   | "Queue" -> Some Queue
+  | "Hashtbl" -> Some Hashtbl
   | _ -> None
 
-(* Per-type layout: field labels of the DS's internal node, plus a bitmask
-   of the fields that carry meaningful information -- the child pointers
-   and the key/value positions.  Unmasked fields (bookkeeping, e.g. the
-   AVL height [h]) never reach the wire. *)
-type layout = { labels : string list; mask : int }
+type layer =
+  | Fixed of
+      { labels : string list
+      ; interior : int
+      ; payload : int
+      }
+  | Array_elements
 
+(* Bit i of a mask covers field i of the node the layer describes. *)
 let layout = function
-  (* stdlib Map: internal node is  Node {l; v; d; r; h}  (Empty is the
-     int 0).  Meaningful: l, v (key), d (data), r. *)
-  | Map -> { labels = [ "l"; "v"; "d"; "r"; "h" ]; mask = 0b01111 }
-  (* stdlib Set: internal node is  Node {l; v; r; h}. *)
-  | Set -> { labels = [ "l"; "v"; "r"; "h" ]; mask = 0b0111 }
+  (* stdlib Map: every internal node is  Node {l; v; d; r; h}  (Empty is
+     the int 0), and l/r lead to nodes of the same shape -- one layer,
+     repeating.  The AVL height [h] is bookkeeping. *)
+  | Map ->
+    [ Fixed
+        { labels = [ "l"; "v"; "d"; "r"; "h" ]
+        ; interior = 0b01001 (* l, r *)
+        ; payload = 0b00110 (* v, d *)
+        } ]
+  (* stdlib Set: Node {l; v; r; h}. *)
+  | Set ->
+    [ Fixed
+        { labels = [ "l"; "v"; "r"; "h" ]
+        ; interior = 0b0101 (* l, r *)
+        ; payload = 0b0010 (* v *)
+        } ]
   (* stdlib Queue: the root is  {length; first; last}  and each cell is
-     Cons {content; next}  (Nil is the int 0).  One mask serves both
-     shapes: bits 0-1 keep length+first on the root and content+next on
-     every cell.  [last] is deliberately dropped -- it is bookkeeping
-     (the O(1) append pointer), and walking it would discover the tail
-     cell as a direct child of the root before the chain reaches it,
-     garbling the chain shape.  Cells (size 2 <> 3 labels) get numeric
-     field labels: 0 = content, 1 = next. *)
-  | Queue -> { labels = [ "length"; "first"; "last" ]; mask = 0b011 }
+     Cons {content; next}  (Nil is the int 0), chained by [next] -- the
+     cell layer repeats.  [last] is deliberately dropped: it is
+     bookkeeping (the O(1) append pointer), and walking it would
+     discover the tail cell as a direct child of the root before the
+     chain reaches it, garbling the chain shape.  Cell labels stay the
+     numeric "0"/"1" the wire has always used for cells. *)
+  | Queue ->
+    [ Fixed
+        { labels = [ "length"; "first"; "last" ]
+        ; interior = 0b010 (* first *)
+        ; payload = 0b001 (* length *)
+        }
+    ; Fixed
+        { labels = [ "0"; "1" ]
+        ; interior = 0b10 (* next *)
+        ; payload = 0b01 (* content *)
+        } ]
+  (* stdlib Hashtbl: the root is  {size; data; seed; initial_size},
+     [data] is the bucket array, and each bucket is a
+     Cons {key; data; next}  chain (Empty is the int 0).  Three layers:
+     record -> array -> chain (repeating).  [seed] and [initial_size]
+     are bookkeeping. *)
+  | Hashtbl ->
+    [ Fixed
+        { labels = [ "size"; "data"; "seed"; "initial_size" ]
+        ; interior = 0b0010 (* data *)
+        ; payload = 0b0001 (* size *)
+        }
+    ; Array_elements
+    ; Fixed
+        { labels = [ "key"; "data"; "next" ]
+        ; interior = 0b100 (* next *)
+        ; payload = 0b011 (* key, data *)
+        } ]

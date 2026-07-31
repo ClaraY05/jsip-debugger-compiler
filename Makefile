@@ -906,6 +906,9 @@ world: coldstart
 world.opt: checknative
 	$(MAKE) coldstart
 	$(MAKE) opt.opt
+# vreplay must track every rebuild: a stale vreplay.cma breaks the typing
+# of code injected under -visual-replay (the [all] target already has it)
+	$(MAKE) vreplay
 
 # FlexDLL sources missing error messages
 # Different git mechanism displayed depending on whether this source tree came

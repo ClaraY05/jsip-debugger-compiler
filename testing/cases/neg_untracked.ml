@@ -1,9 +1,8 @@
-(* Negative: Hashtbl and Stack are out of ds_table until the runtime
-   catalogue has their layouts, and list/array are predef-typed (not
-   declared in any unit ds_table could list).  Empty dump. *)
+(* Negative: Stack is out of ds_table until the runtime catalogue has
+   its layout, and list/array are predef-typed (not declared in any unit
+   ds_table could list).  Empty dump.  (Hashtbl left this list when it
+   got its layered layout -- see hashtbl_basic.) *)
 let () =
-  let h = Hashtbl.create 4 in
-  Hashtbl.add h "k" 1;
   let s = Stack.create () in
   Stack.push 1 s;
   ignore (Stack.pop s);
