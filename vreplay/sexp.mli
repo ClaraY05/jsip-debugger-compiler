@@ -1,3 +1,18 @@
+(**************************************************************************)
+(*                                                                        *)
+(*                                 OCaml                                  *)
+(*                                                                        *)
+(*                       The visual-replay project                        *)
+(*                                                                        *)
+(*   Copyright 2026 Institut National de Recherche en Informatique et     *)
+(*     en Automatique.                                                    *)
+(*                                                                        *)
+(*   All rights reserved.  This file is distributed under the terms of    *)
+(*   the GNU Lesser General Public License version 2.1, with the          *)
+(*   special exception on linking described in the file LICENSE.          *)
+(*                                                                        *)
+(**************************************************************************)
+
 (* Visual replay's serialization module: a minimal s-expression AST (the
    compiler build has no sexplib and must not grow an opam dependency),
    plus the wire schema and its converters.  vreplay.ml re-exports the

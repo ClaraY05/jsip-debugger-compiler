@@ -1,3 +1,18 @@
+(**************************************************************************)
+(*                                                                        *)
+(*                                 OCaml                                  *)
+(*                                                                        *)
+(*                       The visual-replay project                        *)
+(*                                                                        *)
+(*   Copyright 2026 Institut National de Recherche en Informatique et     *)
+(*     en Automatique.                                                    *)
+(*                                                                        *)
+(*   All rights reserved.  This file is distributed under the terms of    *)
+(*   the GNU Lesser General Public License version 2.1, with the          *)
+(*   special exception on linking described in the file LICENSE.          *)
+(*                                                                        *)
+(**************************************************************************)
+
 (* A minimal s-expression AST with a sexplib-compatible printer and a
    parser that inverts it, plus the wire schema and its converters.
    No comment syntax; one sexp per string. *)

@@ -114,7 +114,8 @@ let typecheck_impl { Parse_result.ast = parsetree; info = i } =
   parsetree
   |> Profile.(record typing)
     (Typemod.type_implementation i.target i.env)
-  |> Vreplay_instrumentation.inject_instrumentation ~inject:(!Clflags.visual_replay)
+  |> Vreplay_instrumentation.inject_instrumentation
+       ~inject:(!Clflags.visual_replay)
   |> print_if i.ppf_dump Clflags.dump_typedtree
     Printtyped.implementation_with_coercion
   |> print_if i.ppf_dump Clflags.dump_shape

@@ -1,3 +1,18 @@
+(**************************************************************************)
+(*                                                                        *)
+(*                                 OCaml                                  *)
+(*                                                                        *)
+(*                       The visual-replay project                        *)
+(*                                                                        *)
+(*   Copyright 2026 Institut National de Recherche en Informatique et     *)
+(*     en Automatique.                                                    *)
+(*                                                                        *)
+(*   All rights reserved.  This file is distributed under the terms of    *)
+(*   the GNU Lesser General Public License version 2.1, with the          *)
+(*   special exception on linking described in the file LICENSE.          *)
+(*                                                                        *)
+(**************************************************************************)
+
 (* The catalogue of data structures visual replay knows how to walk.
    typing/vreplay_instrumentation.ml mirrors these names in [ds_table];
    extend both together when adding a data structure. *)

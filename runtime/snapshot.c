@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 #include <errno.h>
 #include <fcntl.h>
 #ifdef _WIN32
@@ -674,7 +675,9 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
  * down with it.
  * ------------------------------------------------------------------ */
 static int wire_fd = -2;               /* -2 not yet chosen, -1 disabled */
-static int wire_fd_is_socket = 0;
+#ifndef _WIN32
+static int wire_fd_is_socket = 0;      /* sockets are a POSIX-only sink */
+#endif
 
 static void wire_disable(const char *what, const char *detail)
 {
@@ -721,15 +724,14 @@ static void wire_write(const char *buf, size_t len)
     if (wire_fd == -2) wire_open_sink();
     while (wire_fd >= 0 && len > 0) {
 #ifdef _WIN32
-        int n;                     /* MSVC has no ssize_t; _write -> int */
+        /* MSVC has no ssize_t, and _write takes an unsigned int count */
+        int n = write(wire_fd, buf,
+                      len > INT_MAX ? INT_MAX : (unsigned int)len);
 #else
         ssize_t n;
-#endif
-#ifndef _WIN32
         if (wire_fd_is_socket) n = send(wire_fd, buf, len, MSG_NOSIGNAL);
-        else
+        else n = write(wire_fd, buf, len);
 #endif
-            n = write(wire_fd, buf, len);
         if (n < 0) {
             if (errno == EINTR) continue;
             wire_disable("write failed on", "the dump sink");

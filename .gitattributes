@@ -258,3 +258,9 @@ testsuite/tests/translprim/module_coercion.ml text eol=lf
 # This is forced to \n to allow the Cygwin testsuite to pass on a
 # Windows-checkout
 testsuite/tests/parsetree/locations_test.ml text eol=lf
+
+# vreplay scratch material: manual test programs (headerless, like the
+# testsuite), a captured example dump, and shared tool configuration
+test_programs/**                                        typo.missing-header typo.long-line=may
+/dump.txt                                               typo.prune
+/.claude/**                                             typo.missing-header typo.long-line=may typo.very-long-line=may
