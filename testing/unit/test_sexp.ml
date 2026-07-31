@@ -105,7 +105,9 @@ let () =
 
 (* floats must survive the wire BIT-exactly, not just approximately *)
 let float_exact name f =
-  let line = Sexp.to_string (Vreplay.to_sexp (snap_of_block (Vreplay.Float f))) in
+  let line =
+    Sexp.to_string (Vreplay.to_sexp (snap_of_block (Vreplay.Float f)))
+  in
   match Vreplay.from_sexp (Sexp.of_string line) with
   | { Vreplay.root_node = { block = [ (_, Vreplay.Float g) ]; _ }; _ } ->
     Tap.check ("float exact: " ^ name)
@@ -162,8 +164,10 @@ let () =
           [ ("No_label", "", "m"); ("Labelled", "init", "0") ]))
     "((No_label (expression (Unnamed m))) \
      (Labelled (label init) (expression (Unnamed 0))))";
-  Tap.check_eq "registry renders as (id addr) pairs" str
-    (Sexp.to_string (Sexp.sexp_of_registry [| (1, 0x10n); (2, 0x20n) |]))
-    "((1 0x10) (2 0x20))"
+  Tap.check_eq
+    "registry renders named entries as triples, anonymous as pairs" str
+    (Sexp.to_string
+       (Sexp.sexp_of_registry [| (1, 0x10n, "q"); (2, 0x20n, "") |]))
+    "((1 0x10 q) (2 0x20))"
 
 let () = Tap.finish ()

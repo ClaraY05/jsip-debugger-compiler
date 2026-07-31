@@ -3,7 +3,9 @@
    deliberately private): ids are per-object and stable, retired ids are
    never reused, the echoed registry lists the live tracked objects in
    insertion order, a collected object's entry is dropped at the next
-   event, and tracking never keeps an object alive.
+   event, tracking never keeps an object alive, and an entry's NAME is
+   the latest non-empty identifier the object was observed under
+   (anonymous entries stay two-atom on the wire).
 
    The runner points VREPLAY_FILE at a scratch file; the sink writes are
    unbuffered, so each assertion can re-read the dump mid-run. *)
@@ -15,11 +17,13 @@ let dump =
   | Some p -> p
   | None -> failwith "run me via testing/run_unit_tests.sh (VREPLAY_FILE unset)"
 
-let snap ?(ds = "Map") v =
+let snap ?(ds = "Map") ?(name = "") v =
   Vreplay.snapshot ~loc:("test_registry.ml", 1, 0, 1)
-    ~fn:("Function_name", "T.probe") ~ds ~args:[] v
+    ~fn:("Function_name", "T.probe") ~ds ~args:[] ~name v
 
-type ev = { id : int; reg : (int * nativeint) list; body : Vreplay.t }
+(* one registry entry: (id, address, name) -- name "" for the two-atom
+   anonymous shape *)
+type ev = { id : int; reg : (int * nativeint * string) list; body : Vreplay.t }
 
 let parse_event line =
   match Sexp.of_string line with
@@ -31,13 +35,15 @@ let parse_event line =
       ; Sexp.List [ Sexp.Atom "args"; _ ]
       ; Sexp.List [ Sexp.Atom "registry"; Sexp.List reg ]
       ; Sexp.List [ Sexp.Atom "snapshot"; body ] ] ->
-    let pair = function
+    let entry = function
       | Sexp.List [ Sexp.Atom i; Sexp.Atom a ] ->
-        (int_of_string i, Nativeint.of_string a)
-      | _ -> failwith "bad registry pair"
+        (int_of_string i, Nativeint.of_string a, "")
+      | Sexp.List [ Sexp.Atom i; Sexp.Atom a; Sexp.Atom n ] ->
+        (int_of_string i, Nativeint.of_string a, n)
+      | _ -> failwith "bad registry entry"
     in
     { id = int_of_string id
-    ; reg = List.map pair reg
+    ; reg = List.map entry reg
     ; body = Vreplay.from_sexp body
     }
   | _ -> failwith "not an event record"
@@ -60,8 +66,14 @@ let last () =
   | e :: _ -> e
   | [] -> failwith "no events yet"
 
-let reg_ids e = List.map fst e.reg
+let reg_ids e = List.map (fun (i, _, _) -> i) e.reg
+let reg_names e = List.map (fun (_, _, n) -> n) e.reg
+let reg_addr id e =
+  let _, a, _ = List.find (fun (i, _, _) -> i = id) e.reg in
+  a
+
 let show_ids ids = String.concat "," (List.map string_of_int ids)
+let show_names ns = String.concat "," ns
 
 (* module-global holders keep tracked values alive; overwriting one is
    the only way a value dies here *)
@@ -87,17 +99,19 @@ let rec leaves n =
 
 let () =
   h1 := build "one" 1;
-  snap !h1;
+  snap ~name:"m_one" !h1;
   let e1 = last () in
   Tap.check_eq "first tracked object gets id 1" string_of_int e1.id 1;
   Tap.check "registry echoes the root at its node address"
-    (e1.reg = [ (1, e1.body.root_node.virtual_address) ]);
+    (e1.reg = [ (1, e1.body.root_node.virtual_address, "m_one") ]);
 
   snap !h1;
   let e2 = last () in
   Tap.check_eq "same object again: same id" string_of_int e2.id 1;
   Tap.check_eq "same object again: registry unchanged" show_ids (reg_ids e2)
     [ 1 ];
+  Tap.check_eq "anonymous re-observation does not erase the name"
+    show_names (reg_names e2) [ "m_one" ];
 
   (* identity is per OBJECT: observing the same value under another ds
      name neither re-registers nor forks the id *)
@@ -106,25 +120,32 @@ let () =
   Tap.check_eq "same object under another ds type: same id" string_of_int
     e3.id 1;
 
-  h2 := build "two" 2;
-  snap !h2;
+  snap ~name:"m_renamed" !h1;
   let e4 = last () in
-  Tap.check_eq "second object: fresh id" string_of_int e4.id 2;
+  Tap.check_eq "latest non-empty name wins (entry renamed)" show_names
+    (reg_names e4) [ "m_renamed" ];
+
+  h2 := build "two" 2;
+  snap ~name:"m_two" !h2;
+  let e5 = last () in
+  Tap.check_eq "second object: fresh id" string_of_int e5.id 2;
   Tap.check_eq "registry lists both, in insertion order" show_ids
-    (reg_ids e4) [ 1; 2 ];
+    (reg_ids e5) [ 1; 2 ];
   Tap.check "new root also echoed at its node address"
-    (List.assoc 2 e4.reg = e4.body.root_node.virtual_address);
+    (reg_addr 2 e5 = e5.body.root_node.virtual_address);
 
   Queue.add !h2 q;
   snap ~ds:"Queue" q;
-  let e5 = last () in
-  Tap.check_eq "queue joins with the next fresh id" string_of_int e5.id 3;
-  Tap.check_eq "registry now tracks all three" show_ids (reg_ids e5)
+  let e6 = last () in
+  Tap.check_eq "queue joins with the next fresh id" string_of_int e6.id 3;
+  Tap.check_eq "registry now tracks all three" show_ids (reg_ids e6)
     [ 1; 2; 3 ];
+  Tap.check_eq "never-named entry stays anonymous" show_names
+    (reg_names e6) [ "m_renamed"; "m_two"; "" ];
   Tap.check "tracked structure inside the queue is an (Id 2) boundary"
-    (List.mem (Vreplay.Id 2) (leaves e5.body.root_node));
+    (List.mem (Vreplay.Id 2) (leaves e6.body.root_node));
   Tap.check "the inner map's data is NOT walked inline"
-    (not (List.mem (Vreplay.String "two") (leaves e5.body.root_node)));
+    (not (List.mem (Vreplay.String "two") (leaves e6.body.root_node)));
 
   (* drop h1's map; a full collection must clear its weak entry and the
      next event must shed id 1 *)
@@ -133,20 +154,20 @@ let () =
   Gc.full_major ();
   Gc.full_major ();
   snap !h2;
-  let e6 = last () in
+  let e7 = last () in
   Tap.check_eq "re-observing a live object keeps its id" string_of_int
-    e6.id 2;
+    e7.id 2;
   Tap.check_eq
     "collected object dropped from the registry (weak, non-pinning)"
-    show_ids (reg_ids e6) [ 2; 3 ];
+    show_ids (reg_ids e7) [ 2; 3 ];
 
   h3 := build "three" 3;
   snap !h3;
-  let e7 = last () in
+  let e8 = last () in
   Tap.check_eq "a retired id is never reused: next object gets 4"
-    string_of_int e7.id 4;
+    string_of_int e8.id 4;
   Tap.check_eq "registry keeps insertion order across compaction" show_ids
-    (reg_ids e7) [ 2; 3; 4 ];
+    (reg_ids e8) [ 2; 3; 4 ];
 
   (* observations that must NOT append an event *)
   let before = count () in
@@ -157,5 +178,5 @@ let () =
   snap ~ds:"Stack" !h2;
   Tap.check "ds without a catalogue layout: no event" (count () = before);
 
-  Tap.check_eq "total events emitted" string_of_int (count ()) 7;
+  Tap.check_eq "total events emitted" string_of_int (count ()) 8;
   Tap.finish ()

@@ -127,6 +127,12 @@ runtime/sak.c            typo.non-ascii
 tools/opam/process.sh    typo.non-ascii
 
 testsuite/tests/**                                      typo.missing-header typo.long-line=may
+
+# vreplay's testing tree follows the testsuite's conventions: cases and
+# helpers carry no copyright headers; expected/ dumps are verbatim
+# single-line wire fixtures (byte-exact goldens, so no trailing LF)
+testing/**                                              typo.missing-header
+testing/expected/*.dump                                 typo.long-line=may typo.very-long-line=may typo.missing-lf=may
 testsuite/tests/lib-bigarray-2/bigarrf.f                typo.tab linguist-language=Fortran
 testsuite/tests/lib-unix/win-stat/fakeclock.c           typo.missing-header=false
 testsuite/tests/misc-unsafe/almabench.ml                typo.long-line

@@ -9,8 +9,9 @@
 open Vreplay
 
 external traverse :
-  Obj.t -> (Obj.t * int) array -> (string array * int * int * bool) array
-  -> node * (int * nativeint) array
+  Obj.t -> (Obj.t * int * string) array
+  -> (string array * int * int * bool) array
+  -> node * (int * nativeint * string) array
   = "caml_wire_traverse"
 
 (* the runtime catalogue's layouts, flattened exactly the way
@@ -25,7 +26,7 @@ let map_layers = layers_of Data_structure.Map
 let queue_layers = layers_of Data_structure.Queue
 
 let no_layers : (string array * int * int * bool) array = [||]
-let no_known : (Obj.t * int) array = [||]
+let no_known : (Obj.t * int * string) array = [||]
 let labels n = List.map fst n.block
 let field l n = List.assoc l n.block
 let show_labels = String.concat ","
@@ -136,7 +137,8 @@ let () =
   | [ c1 ] ->
     Tap.check "queue chain: cell layer repeats down [next]"
       (contents c1 = [ Int 10; Int 20; Int 30 ]);
-    Tap.check "queue final cell: Nil next is Int 0" (field "1" (last c1) = Int 0)
+    Tap.check "queue final cell: Nil next is Int 0"
+      (field "1" (last c1) = Int 0)
   | _ -> Tap.check "queue root: first is the only child" false
 
 (* --- registry boundaries: a known block becomes (Id _), unwalked --- *)
@@ -145,35 +147,44 @@ let () =
   let inner = (1, 2) in
   let outer = (inner, 99) in
   let root, echo =
-    traverse (Obj.repr outer) [| (Obj.repr inner, 42) |] no_layers
+    traverse (Obj.repr outer) [| (Obj.repr inner, 42, "inner") |] no_layers
   in
   Tap.check "boundary: known block surfaces as Id" (field "0" root = Id 42);
   Tap.check "boundary: and is not descended into" (root.children = []);
   Tap.check "boundary: sibling payload unaffected" (field "1" root = Int 99);
   (match echo with
-   | [| (42, a) |] -> Tap.check "boundary: echoed with its address" (a <> 0n)
+   | [| (42, a, "inner") |] ->
+     Tap.check "boundary: echoed with its address and name" (a <> 0n)
    | _ -> Tap.check "boundary: echo shape" false)
 
 let () =
   (* the root itself being known must not collapse the walk to a lone Id:
      vreplay.ml registers the root before walking it *)
   let m = M.add "a" 1 M.empty in
-  let root, echo = traverse (Obj.repr m) [| (Obj.repr m, 7) |] map_layers in
+  let root, echo =
+    traverse (Obj.repr m) [| (Obj.repr m, 7, "m") |] map_layers
+  in
   Tap.check "known root: still walked in full" (root.block <> []);
   (match echo with
-   | [| (7, a) |] ->
+   | [| (7, a, "m") |] ->
      Tap.check "known root: echoed address IS the root node's address"
        (a = root.virtual_address)
    | _ -> Tap.check "known root: echo shape" false)
 
 let () =
   let x = ref 1 and y = ref 2 and z = ref 3 in
-  let known = [| (Obj.repr x, 5); (Obj.repr y, 3); (Obj.repr z, 9) |] in
+  let known =
+    [| (Obj.repr x, 5, "x"); (Obj.repr y, 3, ""); (Obj.repr z, 9, "z") |]
+  in
   let _, echo = traverse (Obj.repr (ref 0)) known no_layers in
   Tap.check_eq "echo preserves registry order (never sorted)"
     (fun l -> show_labels (List.map string_of_int l))
-    (List.map fst (Array.to_list echo))
-    [ 5; 3; 9 ]
+    (List.map (fun (i, _, _) -> i) (Array.to_list echo))
+    [ 5; 3; 9 ];
+  Tap.check_eq "echo carries names through the C walk (empty included)"
+    show_labels
+    (List.map (fun (_, _, n) -> n) (Array.to_list echo))
+    [ "x"; ""; "z" ]
 
 (* --- sharing: one block, one node, several parents --- *)
 
@@ -209,7 +220,8 @@ let () =
   let root, _ = traverse (Obj.repr ones) no_known no_layers in
   Tap.check "cycle: content captured" (field "0" root = Int 1);
   (match root.children with
-   | [ self ] -> Tap.check "cycle: back edge reuses the root node" (self == root)
+   | [ self ] ->
+     Tap.check "cycle: back edge reuses the root node" (self == root)
    | _ -> Tap.check "cycle: one child" false);
   let s =
     Sexp.to_string (to_sexp { ds_type = Data_structure.Map; root_node = root })
@@ -273,7 +285,8 @@ let () =
     , stdin )
   in
   let root, _ = traverse (Obj.repr tup) no_known no_layers in
-  Tap.check "leaf: string keeps embedded NUL" (field "0" root = String "s\000tr");
+  Tap.check "leaf: string keeps embedded NUL"
+    (field "0" root = String "s\000tr");
   Tap.check "leaf: float" (field "1" root = Float 3.5);
   Tap.check "leaf: int32 custom" (field "2" root = Int32 42l);
   Tap.check "leaf: int64 custom" (field "3" root = Int64 43L);

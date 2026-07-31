@@ -885,6 +885,9 @@ vreplay/vreplay.cma: vreplay/data_structure.cmo vreplay/sexp.cmo \
 	$(VREPLAY_OCAMLC) -a -o $@ vreplay/data_structure.cmo \
 	    vreplay/sexp.cmo vreplay/vreplay.cmo
 
+partialclean::
+	rm -f vreplay/*.cm*
+
 # Bootstrap and rebuild the whole system.
 # The compilation of ocaml will fail if the runtime has changed.
 # Never mind, just do make bootstrap to reach fixpoint again.
@@ -2525,8 +2528,8 @@ ocamlprof_SOURCES = \
   pprintast.mli pprintast.ml \
   parse.mli parse.ml \
   parsetree.mli \
-  ocamlprof.mli ocamlprof.ml 
-  
+  ocamlprof.mli ocamlprof.ml
+
 
 ocamlcp_ocamloptp_SOURCES = \
   config.mli config.ml \
