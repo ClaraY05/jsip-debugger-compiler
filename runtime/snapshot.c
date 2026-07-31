@@ -1,3 +1,18 @@
+/**************************************************************************/
+/*                                                                        */
+/*                                 OCaml                                  */
+/*                                                                        */
+/*                        The visual-replay project                       */
+/*                                                                        */
+/*   Copyright 2026 Institut National de Recherche en Informatique et     */
+/*     en Automatique.                                                    */
+/*                                                                        */
+/*   All rights reserved.  This file is distributed under the terms of    */
+/*   the GNU Lesser General Public License version 2.1, with the          */
+/*   special exception on linking described in the file LICENSE.          */
+/*                                                                        */
+/**************************************************************************/
+
 #include "caml/mlvalues.h"
 #include "caml/memory.h"
 #include "caml/alloc.h"
@@ -705,7 +720,11 @@ static void wire_write(const char *buf, size_t len)
 {
     if (wire_fd == -2) wire_open_sink();
     while (wire_fd >= 0 && len > 0) {
+#ifdef _WIN32
+        int n;                     /* MSVC has no ssize_t; _write -> int */
+#else
         ssize_t n;
+#endif
 #ifndef _WIN32
         if (wire_fd_is_socket) n = send(wire_fd, buf, len, MSG_NOSIGNAL);
         else
