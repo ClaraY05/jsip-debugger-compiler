@@ -28,16 +28,18 @@
  *   type node  = { virtual_address : nativeint
  *                ; block : (string * block) list; children : node list }
  *   external traverse :
- *     Obj.t -> (Obj.t * int) array
+ *     Obj.t -> (Obj.t * int * string) array
  *     -> (string array * int * int * bool) array
- *     -> node * (int * nativeint) array
+ *     -> node * (int * nativeint * string) array
  *     = "caml_wire_traverse"
  * The DS type itself stays on the OCaml side ([Vreplay.t] pairs it with
  * the root node once); the walker doesn't need it.  The second component
  * of the result echoes [known] -- the live weak registry -- as
- * (id, address) pairs captured before any allocation, so the addresses
- * are exactly the ones the nodes record: an (Id i) boundary in the
- * snapshot is resolved by indexing this event's registry.
+ * (id, address, name) triples captured before any allocation, so the
+ * addresses are exactly the ones the nodes record: an (Id i) boundary in
+ * the snapshot is resolved by indexing this event's registry.  The name
+ * ("" = anonymous) rides along verbatim: strdup'd in the same
+ * no-allocation window, echoed back with its entry.
  *
  * Given a [root] to walk, [known] (every currently-tracked object paired
  * with its stable id, from the weak registry), and the DS's [layers]
@@ -175,8 +177,11 @@ static void itab_put(itab *t, uintnat p, long idx)
     t->idxs[s] = idx;
 }
 
-/* ---- pointer -> stable id lookup, built once from [known] ---- */
-typedef struct { uintnat ptr; long id; } known_ent;
+/* ---- pointer -> stable id lookup, built once from [known].  [name] is
+ * strdup'd at capture ("" = anonymous); the registry-order copy [reg]
+ * owns every name -- the sorted [known] aliases the same pointers, so
+ * names are freed exactly once, via [registry_free]. ---- */
+typedef struct { uintnat ptr; long id; char *name; } known_ent;
 
 static int known_cmp(const void *a, const void *b)
 {
@@ -328,20 +333,32 @@ static void capture_leaf(cfield *fl, value f)
     fl->ptr = (uintnat)f;
 }
 
-/* The registry echo: (id, address) pairs in registry order, built from
- * data captured before any OCaml allocation. */
+/* The registry echo: (id, address, name) triples in registry order,
+ * built from data captured before any OCaml allocation. */
 static value alloc_registry(const known_ent *reg, mlsize_t nk)
 {
     CAMLparam0();
-    CAMLlocal2(arr, pairv);
+    CAMLlocal2(arr, entv);
     arr = caml_alloc(nk, 0);
     for (mlsize_t k = 0; k < nk; k++) {
-        pairv = caml_alloc(2, 0);
-        Store_field(pairv, 0, Val_long(reg[k].id));
-        Store_field(pairv, 1, caml_copy_nativeint((intnat)reg[k].ptr));
-        Store_field(arr, k, pairv);
+        entv = caml_alloc(3, 0);
+        Store_field(entv, 0, Val_long(reg[k].id));
+        Store_field(entv, 1, caml_copy_nativeint((intnat)reg[k].ptr));
+        Store_field(entv, 2, caml_copy_string(reg[k].name));
+        Store_field(arr, k, entv);
     }
     CAMLreturnT(value, arr);
+}
+
+/* Free the registry-order copy and the strdup'd names it owns.  Called
+ * only after [alloc_registry] has copied the names to the OCaml heap;
+ * never free names through [known], whose entries alias the same
+ * pointers. */
+static void registry_free(known_ent *reg, mlsize_t nk)
+{
+    for (mlsize_t k = 0; k < nk; k++)
+        free(reg[k].name);
+    free(reg);
 }
 
 /* Allocate the OCaml [block] value for one captured field.  Constructor
@@ -401,8 +418,9 @@ static value alloc_block(const cfield *fl)
 }
 
 /* external traverse :
- *   Obj.t -> (Obj.t * int) array -> (string array * int * int * bool) array
- *   -> node * (int * nativeint) array
+ *   Obj.t -> (Obj.t * int * string) array
+ *   -> (string array * int * int * bool) array
+ *   -> node * (int * nativeint * string) array
  *   = "caml_wire_traverse" */
 CAMLprim value caml_wire_traverse(value v_root, value v_known,
                                   value v_layers)
@@ -411,16 +429,19 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
     CAMLlocal5(nodes, nodev, lst, ent, bx);
     CAMLlocal3(cons, regarr, resv);
 
-    /* Build the sorted pointer->id table from [known].  Reads raw pointers of
-     * the known objects; no allocation, so they can't move.  [reg] keeps an
-     * unsorted copy in registry order for the registry echo. */
+    /* Build the sorted pointer->id table from [known].  Reads raw
+     * pointers of the known objects and strdups their names; no OCaml
+     * allocation, so neither can move.  [reg] keeps an unsorted copy in
+     * registry order for the registry echo (and owns the names -- see
+     * registry_free). */
     mlsize_t nk = Is_block(v_known) ? Wosize_val(v_known) : 0;
     known_ent *known = nk ? malloc(sizeof(known_ent) * nk) : NULL;
     known_ent *reg = nk ? malloc(sizeof(known_ent) * nk) : NULL;
     for (mlsize_t k = 0; k < nk; k++) {
-        value pair = Field(v_known, k);
-        known[k].ptr = (uintnat)Field(pair, 0);
-        known[k].id  = (long)Long_val(Field(pair, 1));
+        value trip = Field(v_known, k);
+        known[k].ptr  = (uintnat)Field(trip, 0);
+        known[k].id   = (long)Long_val(Field(trip, 1));
+        known[k].name = strdup(String_val(Field(trip, 2)));
     }
     if (nk) {
         memcpy(reg, known, sizeof(known_ent) * nk);
@@ -449,7 +470,7 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
         Store_field(resv, 0, nodev);
         Store_field(resv, 1, regarr);
         free(known);
-        free(reg);
+        registry_free(reg, nk);
         CAMLreturn(resv);
     }
 
@@ -608,7 +629,7 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
     free(known);
 
     regarr = alloc_registry(reg, nk);
-    free(reg);
+    registry_free(reg, nk);
     resv = caml_alloc(2, 0);
     Store_field(resv, 0, Field(nodes, 0));
     Store_field(resv, 1, regarr);

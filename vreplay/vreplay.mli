@@ -35,9 +35,9 @@ type t = Sexp.snapshot = {
 val to_sexp : t -> Sexp.t
 val from_sexp : Sexp.t -> t
 
-(* [snapshot ~loc ~fn ~ds ~args root] assigns [root] a stable id (holding
-   it weakly), has the C walker build the [node] tree for it, and emits
-   one line through [caml_wire_emit]:
+(* [snapshot ~loc ~fn ~ds ~args ~name root] assigns [root] a stable id
+   (holding it weakly), has the C walker build the [node] tree for it,
+   and emits one line through [caml_wire_emit]:
 
      (event (id 2)
        (loc ((file_path t.ml) (line_number 4) (char_range (10 23))))
@@ -51,6 +51,15 @@ val from_sexp : Sexp.t -> t
    No-ops when [ds] is not a known data structure or [root] is
    immediate.
 
+   [name] is the source identifier the root was observed under -- the
+   [let] binder for a bound result, a mutated container argument's own
+   identifier -- or "" when there is none (nested calls, wildcard
+   patterns, results of helpers).  The registry renders a named entry as
+   [(id address name)] and an anonymous one as [(id address)]; the
+   LATEST non-empty name a structure was observed under wins, so an
+   entry can rename between events as the program passes the value
+   around.
+
    One CALL can carry several observations: the instrumentation injects
    one [snapshot] -- one record -- per root (each mutated container
    argument, then a structure result), all inside the call's single
@@ -58,5 +67,5 @@ val from_sexp : Sexp.t -> t
    markers; they share loc/fn/args and differ in root. *)
 val snapshot :
   loc:string * int * int * int -> fn:string * string -> ds:string
-  -> args:(string * string * string) list
+  -> args:(string * string * string) list -> name:string
   -> 'a -> unit

@@ -140,10 +140,12 @@ application), `find` (returns the value, not the map) and `ignore` (not a DS cal
 don't. One event per line, prefixed by the frame markers giving its depth delta (`{` is
 +1, `}` is −1). The payload is real: the `event` wrapper carries the root's registry
 id, location, function name, the arguments as `(label-kind source-text)` pairs, the
-live weak registry as `(id address)` pairs (grows as structures are tracked, drops
-entries the GC collected; addresses captured by the same walk as the nodes), and
-`(snapshot ...)` — `Vreplay.to_sexp` of the `{ ds_type; root_node }` record with the
-walked shape:
+live weak registry as `(id address)` or `(id address name)` entries (grows as
+structures are tracked, drops entries the GC collected; addresses captured by the same
+walk as the nodes; the name is the identifier the structure was last observed under —
+the `let` binder or a mutated container argument — latest non-empty wins, absent while
+anonymous), and `(snapshot ...)` — `Vreplay.to_sexp` of the `{ ds_type; root_node }`
+record with the walked shape:
 
 ```
 {(event (id 1)
@@ -152,11 +154,11 @@ walked shape:
    (args ((No_label (expression (Unnamed "\"a\"")))
           (No_label (expression (Unnamed 1)))
           (No_label (expression (Unnamed m)))))
-   (registry ((1 0x7f...)))
+   (registry ((1 0x7f... m)))
    (snapshot ((ds_type Map) (root_node ((virtual_address 0x7f...)
      (block ((l (Int 0)) (v (String a)) (d (Int 1)) (r (Int 0))))
      (children ()))))))
-}{(event (id 2) ... (registry ((1 0x7f...) (2 0x7f...))) ...)
+}{(event (id 2) ... (registry ((1 0x7f... m) (2 0x7f... m))) ...)
 }{(event (id 3) ... (fn (Function_name M.remove)) ...)
 }
 ```
@@ -231,8 +233,9 @@ the hooks.
 constructor were declared in a compilation unit listed in `ds_table` — provenance read
 off `val_uid`/`type_uid`, which survives `Map.Make` application, `open`, `include` and
 aliasing. Each event runs a post-call `~inject_after` hook, sequenced between the result
-binding and the closing `}`, which types a real `Vreplay.snapshot ~loc ~fn ~ds <root>`
-call — the hand-off into the runtime's weak registry and C walker. `ds_table` covers
+binding and the closing `}`, which types a real
+`Vreplay.snapshot ~loc ~fn ~ds ~args ~name <root>` call — the hand-off into the
+runtime's weak registry and C walker. `ds_table` covers
 `Stdlib__Map`/`Set` (immutable, root = the result) and `Stdlib__Queue` (mutable, root =
 the first structure-typed ident argument, read post-call; reads like `pop`/`peek` fire
 too by design), each with a matching layout in the runtime catalogue
@@ -319,7 +322,7 @@ Reference fixture: `~/jsip-debugger-interface/app/bin/dummy.txt`.
   (loc ((file_path t.ml) (line_number 4) (char_range (10 23))))
   (fn (Function_name M.add))
   (args ((No_label (expression (Unnamed m))) ...))
-  (registry ((1 0x..) (2 0x..))) (snapshot <payload>))
+  (registry ((1 0x.. m) (2 0x..))) (snapshot <payload>))
 ```
 
 where `loc`/`fn`/`args` are rendered in the shapes `[@@deriving sexp]`
@@ -329,8 +332,10 @@ derived, not hand-written (see `Sexp.sexp_of_loc/fn/args` in
 `vreplay/sexp.mli`),
 
 where `(registry ...)` is the live weak registry — every tracked-and-alive structure
-as an `(id current-address)` pair, captured by the same C walk as the nodes so an
-`(Id i)` boundary inside the snapshot resolves by indexing it — and `<payload>` is
+as an `(id current-address)` or `(id current-address name)` entry (the name, when the
+structure has been observed under one — `let` binder or mutated container argument,
+latest non-empty wins), captured by the same C walk as the nodes so an `(Id i)`
+boundary inside the snapshot resolves by indexing it — and `<payload>` is
 `Vreplay.to_sexp` of the wire record (defined in `vreplay/sexp.ml`, re-exported by
 `Vreplay`):
 
