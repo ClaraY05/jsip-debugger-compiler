@@ -193,15 +193,16 @@ let classify (exp : Typedtree.expression)
 
 (* ---- the injected observation ---- *)
 
-(* Build and type [Vreplay.snapshot ~loc ~fn ~ds ~args <root>] in [env].
-   [root] is always a plain identifier -- [__vreplay_res] or a mutated
-   argument ([argument_roots] only accepts idents) -- so typing it in
-   the post-call env resolves to the value in scope there.  [loc], [fn] and
-   [args] become literal tuples/lists of string and int constants in
-   [Wire.t]'s shapes.  [Vreplay] is resolved by ordinary name resolution
-   against the instrumented unit's load path ("+vreplay",
-   driver/compmisc.ml). *)
-let snapshot_call env ~loc ~fn ~ds ~args ~root =
+(* Build and type [Vreplay.snapshot ~loc ~fn ~ds ~args ~name <root>] in
+   [env].  [root] is always a plain identifier -- [__vreplay_res] or a
+   mutated argument ([argument_roots] only accepts idents) -- so typing
+   it in the post-call env resolves to the value in scope there.  [name]
+   is the identifier the root is known by in the source ("" = none);
+   [loc], [fn], [args] and [name] become literal tuples/lists of string
+   and int constants in [Wire.t]'s shapes.  [Vreplay] is resolved by
+   ordinary name resolution against the instrumented unit's load path
+   ("+vreplay", driver/compmisc.ml). *)
+let snapshot_call env ~loc ~fn ~ds ~args ~name ~root =
   let str s =
     Ast_helper.Exp.constant
       { pconst_desc = Pconst_string (s, Location.none, None)
@@ -240,6 +241,7 @@ let snapshot_call env ~loc ~fn ~ds ~args ~root =
        ; (Asttypes.Labelled "fn", tuple [ str fn_kind; str fn_text ])
        ; (Asttypes.Labelled "ds",  str ds)
        ; (Asttypes.Labelled "args", list_of args)
+       ; (Asttypes.Labelled "name", str name)
        ; (Asttypes.Nolabel, Ast_helper.Exp.ident (Location.mknoloc root)) ])
 
 (* the identifier the post-call hook reads: the bound result, or the
@@ -350,6 +352,26 @@ let inject_mapper (emit_prim : Typedtree.primitive_description) =
   let super = Tast_mapper.default in
   let emit env payload = Wire.emit emit_prim env payload in
 
+  (* the innermost enclosing [let] binder and its right-hand side, live
+     while that RHS is being visited: [inject_value_binding] saves and
+     restores it around each binding, so nested lets shadow correctly.
+     A Result root takes the name only when its application is
+     PHYSICALLY the whole RHS -- inner calls stay anonymous.  ([let*]
+     bindings never pass through [value_binding]; their results stay
+     anonymous.) *)
+  let current_binder : (string * Typedtree.expression) option ref =
+    ref None
+  in
+  let inject_value_binding self (vb : Typedtree.value_binding) =
+    let binder =
+      match vb.vb_pat.pat_desc with
+      | Tpat_var (_, { txt; _ }, _) -> Some (txt, vb.vb_expr)
+      | _ -> None
+    in
+    Misc.protect_refs [ Misc.R (current_binder, binder) ]
+      (fun () -> super.value_binding self vb)
+  in
+
   let inject_expression self (exp : Typedtree.expression) =
     let recurse_down : Typedtree.expression = super.expr self exp in
     match exp.exp_desc with
@@ -358,14 +380,26 @@ let inject_mapper (emit_prim : Typedtree.primitive_description) =
       | None -> recurse_down
       | Some (ds, roots) ->
         let wire = Wire.format_function_call exp func args in
+        let result_name =
+          match !current_binder with
+          | Some (name, rhs) when rhs == exp -> name
+          | Some _ | None -> ""
+        in
         let hooks =
           List.map
             (fun root ->
+               let name =
+                 match root with
+                 | Result -> result_name
+                 | Argument _ ->
+                   Format.asprintf "%a" Pprintast.longident
+                     (root_lid args root)
+               in
                let root = root_lid args root in
                fun env ->
                  snapshot_call env ~loc:wire.Wire.location
                    ~fn:wire.Wire.function_info ~ds
-                   ~args:wire.Wire.argument_list ~root)
+                   ~args:wire.Wire.argument_list ~name ~root)
             roots
         in
         { exp with
@@ -373,7 +407,9 @@ let inject_mapper (emit_prim : Typedtree.primitive_description) =
       end
     | _ -> recurse_down
   in
-  { super with Tast_mapper.expr = inject_expression }
+  { super with
+    Tast_mapper.expr = inject_expression
+  ; value_binding = inject_value_binding }
 
 (* exposed for compile_common *)
 let inject_instrumentation ~inject (tast : Typedtree.implementation) =

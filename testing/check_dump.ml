@@ -47,7 +47,8 @@ let () =
              args;
            List.iter
              (function
-               | Sexp.List [ Sexp.Atom _; Sexp.Atom a ]
+               | Sexp.List
+                   (Sexp.Atom _ :: Sexp.Atom a :: ([] | [ Sexp.Atom _ ]))
                  when String.length a > 2 && a.[0] = '0' && a.[1] = 'x' ->
                  ()
                | _ -> fail !lineno "malformed registry entry")

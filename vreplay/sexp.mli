@@ -88,14 +88,17 @@ type snapshot = {
 val to_sexp : snapshot -> t
 val from_sexp : t -> snapshot
 
-(* The live weak registry at event time as (id, current address) pairs --
-   the event wrapper carries it beside the snapshot, and it is the single
-   source of memory locations for tracked structures: an [Id i] inside
-   the snapshot is resolved by indexing this registry.  Ids are stable
-   across events; addresses are captured by the same C walk as the
-   nodes.  Entries appear when a structure is first tracked and
-   disappear once the GC has collected it. *)
-val sexp_of_registry : (int * nativeint) array -> t
+(* The live weak registry at event time as (id, current address, name)
+   triples -- the event wrapper carries it beside the snapshot, and it is
+   the single source of memory locations for tracked structures: an
+   [Id i] inside the snapshot is resolved by indexing this registry.  Ids
+   are stable across events; addresses are captured by the same C walk as
+   the nodes.  The name is the latest non-empty identifier the structure
+   was observed under (a later event may rename it); a named entry
+   renders as [(1 0x7f2ce89e q)], an anonymous one ([""]) keeps the
+   two-atom [(1 0x7f2ce89e)] shape.  Entries appear when a structure is
+   first tracked and disappear once the GC has collected it. *)
+val sexp_of_registry : (int * nativeint * string) array -> t
 
 (* The remaining event-wrapper fields, rendered in the shapes
    [@@deriving sexp] gives the interface repo's own types so its reader
