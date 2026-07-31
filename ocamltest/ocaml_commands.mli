@@ -33,5 +33,3 @@ val ocamlrun_ocamlobjinfo : string
 
 val ocamlrun_ocamlmklib : string
 val ocamlrun_codegen : string
-
-val ocamltest : string

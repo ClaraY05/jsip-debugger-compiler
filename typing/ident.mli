@@ -83,7 +83,6 @@ module Unscoped : sig
    val refresh: t -> t
 
    val name: t -> string
-   val print: Format.formatter -> t -> unit
    val same: t -> t -> bool
 
    type change

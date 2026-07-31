@@ -90,12 +90,12 @@ let debug debugger_type log env =
       ~append:true
       log (env_with_lib_unix env) commandline in
   if exit_status=expected_exit_status
-  then (Test_result.pass, env)
+  then (Result.pass, env)
   else begin
     let reason =
       (Actions_helpers.mkreason
          what (String.concat " " commandline) exit_status) in
-    (Test_result.fail_with_reason reason, env)
+    (Result.fail_with_reason reason, env)
   end
 
 let lldb =

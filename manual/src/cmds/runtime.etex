@@ -132,12 +132,10 @@ The following environment variables are also consulted:
         startup time instead of at backtrace printing time. "b=2" can be used if
         the runtime is unable to load debugging information at backtrace
         printing time, for example if there are no file descriptors available.
-  \item[c] ("cleanup_on_exit") If set to 1, the runtime will be shut down
-        gracefully on exit (see "caml_shutdown" in
-        section~\ref{ss:c-embedded-code}). The option also enables pooling (as
-        in "caml_startup_pooled"). This mode can be used to detect leaks with a
-        third-party memory debugger. No attempt is made to shut down the
-        runtime if there is more than one domain alive at exit.
+  \item[c] ("cleanup_on_exit") Shut the runtime down gracefully on exit (see
+        "caml_shutdown" in section~\ref{ss:c-embedded-code}). The option also enables
+        pooling (as in "caml_startup_pooled"). This mode can be used to detect
+        leaks with a third-party memory debugger.
   \item[d] ("max_domains") Maximum number of domains that can be active
         concurrently. Defaults to 128 on 64-bit platforms and 16 on 32-bit
         platforms.
@@ -147,9 +145,6 @@ The following environment variables are also consulted:
   \item[l] ("stack_limit") The limit (in words) of the stack size. This is
         relevant to both the byte-code runtime and the native code runtime:
         OCaml always uses its own stack and not the operating system's stack.
-  \item[S] ("thread_system_stack_size") The minimum system stack size (in bytes)
-        for new threads. This can be useful for threads that call FFI code
-        that needs a larger system stack.
   \item[m] ("custom_minor_ratio") Bound on floating garbage for
         out-of-heap memory
         held by custom values in the minor heap. A minor GC is triggered

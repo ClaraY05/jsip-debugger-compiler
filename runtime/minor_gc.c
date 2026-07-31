@@ -162,16 +162,15 @@ static value alloc_shared(caml_domain_state* d,
   return Val_hp(mem);
 }
 
-/* In-progress headers are zeros except for the lowest color bit set
-   to 1. */
-#define In_progress_hd (Make_header(0, 0, 0x100))
-#define Is_update_in_progress(hd) ((hd) == In_progress_hd)
+/* in progress updates are zeros except for the lowest color bit set to 1
+   that is, reserved == wosize == tag == 0, color == 1 */
+#define In_progress_update_val Make_header(0, 0, 1 << HEADER_COLOR_SHIFT)
+#define Is_update_in_progress(hd) ((hd) == In_progress_update_val)
 
-static header_t spin_on_header(value v) {
+static void spin_on_header(value v) {
   SPIN_WAIT {
-    header_t h = atomic_load(Hp_atomic_val(v));
-    if (Is_promoted_hd(h))
-      return h;
+    if (atomic_load(Hp_atomic_val(v)) == 0)
+      return;
   }
 }
 
@@ -181,43 +180,49 @@ Caml_inline header_t get_header_val(value v) {
   if (!Is_update_in_progress(hd))
     return hd;
 
-  return spin_on_header(v);
+  spin_on_header(v);
+  return 0;
 }
+
+header_t caml_get_header_val(value v) {
+  return get_header_val(v);
+}
+
 
 static int try_update_object_header(value v, volatile value *p, value result,
                                     mlsize_t infix_offset) {
   int success = 0;
 
   if( caml_domain_alone() ) {
-    *Hp_val (v) = Promoted_hd;
+    *Hp_val (v) = 0;
     Field(v, 0) = result;
     success = 1;
   } else {
     header_t hd = atomic_load(Hp_atomic_val(v));
-    if( Is_promoted_hd(hd) ) {
+    if( hd == 0 ) {
       /* in this case this has been updated by another domain, throw away result
          and return the one in the object */
       result = Field(v, 0);
     } else if( Is_update_in_progress(hd) ) {
       /* here we've caught a domain in the process of moving a minor heap object
          we need to wait for it to finish */
-      (void)spin_on_header(v);
+      spin_on_header(v);
       /* Also throw away result and use the one from the other domain */
       result = Field(v, 0);
     } else {
       /* Here the header is neither zero nor an in-progress update */
-      header_t desired_hd = In_progress_hd;
+      header_t desired_hd = In_progress_update_val;
       if( atomic_compare_exchange_strong(Hp_atomic_val(v), &hd, desired_hd) ) {
         /* Success. Now we can write the forwarding pointer. */
         atomic_store_relaxed(Op_atomic_val(v), result);
         /* And update header ('release' ensures after update of fwd pointer) */
-        atomic_store_release(Hp_atomic_val(v), Promoted_hd);
+        atomic_store_release(Hp_atomic_val(v), 0);
         /* Let the caller know we were responsible for the update */
         success = 1;
       } else {
         /* Updated by another domain. Spin for that update to complete and
            then throw away the result and use the one from the other domain. */
-        (void)spin_on_header(v);
+        spin_on_header(v);
         result = Field(v, 0);
       }
     }
@@ -252,7 +257,7 @@ static void oldify_one (void* st_v, value v, volatile value *p)
   infix_offset = 0;
   do {
     hd = get_header_val(v);
-    if (Is_promoted_hd(hd)) {
+    if (hd == 0) {
       /* already forwarded, another domain is likely working on this. */
       *p = Field(v, 0) + infix_offset;
       return;
@@ -269,12 +274,13 @@ static void oldify_one (void* st_v, value v, volatile value *p)
 
   if (tag == Cont_tag) {
     value stack_value = Field(v, 0);
-    CAMLassert(Wosize_hd(hd) == 1);
+    CAMLassert(Wosize_hd(hd) == 2);
     CAMLassert(infix_offset == 0);
-    result = alloc_shared(st->domain, 1, Cont_tag, Reserved_hd(hd));
+    result = alloc_shared(st->domain, 2, Cont_tag, Reserved_hd(hd));
     if( try_update_object_header(v, p, result, 0) ) {
       struct stack_info* stk = Ptr_val(stack_value);
       Field(result, 0) = stack_value;
+      Field(result, 1) = Field(v, 1);
       if (stk != NULL) {
         caml_scan_stack(&oldify_one, oldify_scanning_flags, st,
                         stk, 0);
@@ -287,6 +293,7 @@ static void oldify_one (void* st_v, value v, volatile value *p)
                                     caml_allocation_status());
       #ifdef DEBUG
       Field(result, 0) = Val_long(1);
+      Field(result, 1) = Val_long(1);
       #endif
     }
   } else if (tag < Infix_tag) {
@@ -336,7 +343,7 @@ static void oldify_one (void* st_v, value v, volatile value *p)
       #endif
     }
 
-  } else if (!Scannable_tag(tag)) {
+  } else if (tag >= No_scan_tag) {
     sz = Wosize_hd (hd);
     st->live_bytes += Bhsize_hd(hd);
     result = alloc_shared(st->domain, sz, tag, Reserved_hd(hd));
@@ -364,7 +371,7 @@ static void oldify_one (void* st_v, value v, volatile value *p)
     ft = 0;
 
     if (Is_block (f)) {
-      ft = Tag_val (Is_promoted_hd(get_header_val(f)) ? Field(f, 0) : f);
+      ft = Tag_val (get_header_val(f) == 0 ? Field(f, 0) : f);
     }
 
     if (ft == Forward_tag || ft == Lazy_tag ||
@@ -415,7 +422,7 @@ again:
 
   while (st->todo_list != 0) {
     v = st->todo_list;                   /* Get the head. */
-    CAMLassert (Is_promoted_hd(get_header_val(v))); /* It must be forwarded. */
+    CAMLassert (get_header_val(v) == 0); /* It must be forwarded. */
     new_v = Field(v, 0);                 /* Follow forward pointer. */
     st->todo_list = Field (new_v, 1);    /* Remove from list. */
 
@@ -477,7 +484,7 @@ again:
           re->offset != CAML_EPHE_DATA_OFFSET && /* ephe key (not data)  */
           Is_block(v) &&                         /* a block              */
           young_start <= v && v < young_end &&   /* on *this* minor heap */
-          !Is_promoted_hd(hd = Hd_val(v)) &&     /* not already promoted */
+          (hd = Hd_val(v)) != 0 &&               /* not already promoted */
           Tag_hd(hd) != Infix_tag &&             /* not Infix_tag        */
           atomic_compare_exchange_strong(data, &v, caml_ephe_locked)) {
         /* locked, clean it later */
@@ -667,7 +674,7 @@ caml_empty_minor_heap_promote(caml_domain_state* domain,
        r < self_minor_tables->major_ref.ptr; r++) {
     value vnew = **r;
     CAMLassert (!Is_block(vnew)
-            || (!Is_promoted_hd(get_header_val(vnew)) && !Is_young(vnew)));
+            || (get_header_val(vnew) != 0 && !Is_young(vnew)));
   }
 #endif
 
@@ -771,7 +778,7 @@ static void ephe_clean_minor (caml_domain_state* domain)
       hd = Hd_val(v);
     }
     CAMLassert(Tag_hd(hd) != Infix_tag);
-    if (Is_promoted_hd(hd)) {
+    if (hd == 0) {
       /* promoted */
       v = Field(v, 0) + infix_offset;
     } else {
@@ -795,7 +802,7 @@ static void custom_finalize_minor (caml_domain_state * domain)
        elt++) {
     value *v = &elt->block;
     if (Is_block(*v) && Is_young(*v)) {
-      if (Is_promoted_hd(Hd_val(*v))) { /* value copied to major heap */
+      if (get_header_val(*v) == 0) { /* value copied to major heap */
         caml_adjust_gc_speed(elt->mem, elt->max);
       } else {
         void (*final_fun)(value) = Custom_ops_val(*v)->finalize;

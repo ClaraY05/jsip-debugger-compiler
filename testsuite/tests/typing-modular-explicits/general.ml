@@ -126,8 +126,6 @@ Line 3, characters 6-7:
           ^
 Error: The value "m" has type "(module Typ with type t = int)"
        but an expression was expected of type "(module Typ)"
-       The constraint on "t" in the first module type is not compatible
-       with the declaration of type t in the second module type.
 |}]
 
 (** From here we will test things with labels *)
@@ -161,6 +159,22 @@ let apply_labelled_success = labelled' ~y:3
 [%%expect{|
 val labelled' : (module M : Typ with type t = int) -> y:M.t -> M.t = <fun>
 val apply_labelled_success : (module Typ with type t = int) -> int = <fun>
+|}]
+
+(* Labels hidden in a module argument should be known and allowed to be omitted *)
+module type Lbls = sig type t= x:int -> y:int -> int type e = E end
+module L = struct type t = x:int -> y:int -> int type e = E end
+let f (g : (module L:Lbls) -> L.t) (module L:Lbls) = g (module L) 0 1
+[%%expect {|
+module type Lbls = sig type t = x:int -> y:int -> int type e = E end
+module L : sig type t = x:int -> y:int -> int type e = E end
+Line 3, characters 53-54:
+3 | let f (g : (module L:Lbls) -> L.t) (module L:Lbls) = g (module L) 0 1
+                                                         ^
+Warning 6 [labels-omitted]: labels "x", "y" were omitted in the application of
+  this function.
+
+val f : ((module L : Lbls) -> L.t) -> (module Lbls) -> int = <fun>
 |}]
 
 (* Check that the optionnal argument is removed correctly when applying a
@@ -348,7 +362,7 @@ let s_list_arrayb =
       string_of_int [|[3; 2]; [2]; []|]
 
 [%%expect{|
-val s_list_arrayb : string list array = [|["3"; "2"]; ["2"]; []|]
+val s_list_arrayb : string list Array.t = [|["3"; "2"]; ["2"]; []|]
 |}]
 
 module F () : Map = struct
@@ -1439,45 +1453,6 @@ val u : ((module M : T) -> ([> M.v ] as 'a) -> 'a) -> (module T) -> 'a -> 'a =
   <fun>
 |}]
 
-(* Test shadowing of an include that could cause an error due to a module
-   not matching an inferred signature. *)
-
-module U = struct
-  type t = unit = ()
-end
-module M = struct
-  include U
-  type t = float
-  module type S = sig type t end
-  let f : (module X:S) -> X.t -> int = fun (module X:S)     _  -> 3
-end
-
-[%%expect{|
-module U : sig type t = unit = () end
-module M :
-  sig
-    type t = float
-    module type S = sig type t end
-    val f : (module X : S) -> X.t -> int
-  end
-|}]
-
-module type T = sig
-  type t
-end
-
-module F (X : T) = struct
-  type t = (module Y : T) -> Y.t -> X.t
-end
-
-module M = F(struct type t = float end)
-
-[%%expect{|
-module type T = sig type t end
-module F : (X : T) -> sig type t = (module Y : T) -> Y.t -> X.t end
-module M : sig type t = (module Y : T) -> Y.t -> float end
-|}]
-
 (** Warnings *)
 
 module type Iter = sig
@@ -1495,7 +1470,7 @@ Line 1, characters 19-75:
 1 | let too_many_arg = iter (module Iarray) (Format.printf "%d@.") [|0;1;2|] ()
                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Error: The function "iter" has type
-         "(module M : Iter) -> ('b -> unit) -> 'b M.t -> unit"
+         (module M : Iter) -> ('a -> unit) -> 'a M.t -> unit
        It is applied to too many arguments
 Line 1, characters 71-73:
 1 | let too_many_arg = iter (module Iarray) (Format.printf "%d@.") [|0;1;2|] ()
@@ -1513,7 +1488,7 @@ Line 1, characters 23-64:
 1 | let too_many_arg_bis = map (module Iarray) succ [| 0; 1; 2 |] ()
                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Error: The function "map" has type
-         "(module M : Map) -> ('c -> 'd) -> 'c M.t -> 'd M.t"
+         (module M : Map) -> ('a -> 'b) -> 'a M.t -> 'b M.t
        It is applied to too many arguments
 Line 1, characters 62-64:
 1 | let too_many_arg_bis = map (module Iarray) succ [| 0; 1; 2 |] ()

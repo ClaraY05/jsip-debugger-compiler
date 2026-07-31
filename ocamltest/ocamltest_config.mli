@@ -33,14 +33,8 @@ val cppflags : string
 val cc : string
 (** Command to use to invoke the C compiler *)
 
-val outputobj : string
-(** The exact string to use when running [cc -c] to name the object file *)
-
 val cflags : string
 (** Flags to pass to the C compiler *)
-
-val cxx : string
-(** Command to use to invoke the C++ compiler *)
 
 val ccomp_type : string
 (** Type of C compiler (msvc, cc, etc.) *)
@@ -158,6 +152,3 @@ val has_relative_libdir : bool
 val suffixing : bool
 (** Whether C stub library filenames are being mangled with the Bytecode
     Runtime ID and {!Config.target}. *)
-
-val reserved_header_bits : int
-(** How many bits of a block's header are reserved *)

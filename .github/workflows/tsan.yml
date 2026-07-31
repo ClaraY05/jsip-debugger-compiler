@@ -8,10 +8,6 @@ on:
 # Restrict the GITHUB_TOKEN
 permissions: {}
 
-env:
-  # Disable 'cold' tests
-  OCAMLTEST_COLD_TESTS: 0
-
 # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#concurrency
 # Concurrent workflows are grouped by the PR or branch that triggered them
 # (github.ref) and the name of the workflow (github.workflow). The
@@ -33,7 +29,7 @@ jobs:
       manual_changed: ${{ steps.manual.outputs.manual_changed }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Install libunwind
@@ -55,7 +51,7 @@ jobs:
       - name: Prepare Artifact
         run: tar --zstd -cf /tmp/sources.tar.zstd .
       - name: Upload Artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: compiler
           path: /tmp/sources.tar.zstd
@@ -81,7 +77,7 @@ jobs:
             dependencies: libunwind-dev
     steps:
       - name: Download Artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: compiler
       - name: Unpack Artifact

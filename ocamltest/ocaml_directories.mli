@@ -26,5 +26,3 @@ val toplevel : string
 val runtime : string
 
 val tools : string
-
-val ocamltest : string

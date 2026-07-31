@@ -14,5 +14,3 @@ rule token = parse
   | '('               { LPAREN }
   | ')'               { RPAREN }
   | eof               { raise Eof }
-  | _ as c            { failwith
-                          (Printf.sprintf "invalid input character: %C" c) }

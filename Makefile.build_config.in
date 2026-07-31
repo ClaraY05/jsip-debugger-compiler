@@ -81,11 +81,6 @@ DEP_FLAGS =
 endif
 COMPUTE_DEPS=@compute_deps@
 
-TEST_CXX = @ocamltest_CXX@
-TEST_CXX_CXXFLAGS = @common_cflags@
-TEST_CXX_CPPFLAGS = @common_cppflags@
-CXXFLAGS ?=
-
 BUILD_PATH_LOGICAL = @srcdir_abs@
 BUILD_PATH_PHYSICAL = @srcdir_abs_real@
 BUILD_MAP_FLAGS = @build_map_flags@
@@ -111,9 +106,6 @@ OC_CPPFLAGS = $(OC_INCLUDES) @oc_cppflags@
 OC_BYTECODE_CPPFLAGS = $(OC_INCLUDES) @oc_bytecode_cppflags@
 
 OC_NATIVE_CPPFLAGS = $(OC_INCLUDES) @oc_native_cppflags@
-
-EXTRA_WARNINGS_CFLAGS = @cc_extra_warnings@
-EXTRA_WARNINGS_CXXFLAGS = @cxx_extra_warnings@
 
 # Additional link-time options
 # To support dynamic loading of shared libraries (they need to look at
@@ -156,7 +148,6 @@ DOCUMENTATION_TOOL_CMD=@documentation_tool_cmd@
 # Git submodule)
 FLEXDLL_SOURCE_DIR=@flexdll_source_dir@
 BOOTSTRAPPING_FLEXDLL=@bootstrapping_flexdll@
-FLEXDLL_CC_VAR=@flexdll_cc_var@
 
 ### Where to install documentation
 PACKAGE_TARNAME = @PACKAGE_TARNAME@
@@ -195,8 +186,8 @@ DEFAULT_BUILD_TARGET = @default_build_target@
 # added to both XXX_YYY_COMPFLAGS and XXX_YYY_LINKFLAGS.
 
 OC_COMMON_COMPFLAGS = -g -strict-sequence -principal -absname \
-  -w +a-4-9-40-41-42-44-45-48 -warn-error +a -alert @ocaml_deprecated_cli \
-  -bin-annot -strict-formats
+  -w +a-4-9-40-41-42-44-45-48 -warn-error +a -bin-annot \
+  -strict-formats
 OC_COMMON_LINKFLAGS = $(INCLUDES)
 
 OC_BYTECODE_LINKFLAGS =
@@ -211,7 +202,7 @@ BUILD_TRIPLET = @build@
 ZINC_RUNTIME_ID = @zinc_runtime_id@
 
 # Platform-dependent command to create symbolic links
-LN_S = @LN_S@
+LN = @ln@
 
 # Tool to generate manifests for managed assemblies and unmanaged side-by-side
 # assemblies, for the Windows targets.

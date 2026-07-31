@@ -79,7 +79,8 @@ CAMLprim value caml_ephe_create (value len)
   res = caml_alloc_shr (size, Abstract_tag);
 
   /* Add the new ephemeron to the live list */
-  caml_ephe_list_cons_inplace(res, &domain_state->ephe_info->live);
+  Ephe_link(res) = domain_state->ephe_info->live;
+  domain_state->ephe_info->live = res;
 
   for (mlsize_t i = CAML_EPHE_DATA_OFFSET; i < size; i++)
     Field(res, i) = caml_ephe_none;
@@ -335,7 +336,7 @@ static void ephe_copy_and_darken(value from, value to)
   CAMLassert(Tag_val(from) != Infix_tag);
   CAMLassert(Wosize_val(from) == Wosize_val(to));
 
-  if (!Scannable_val(from)) {
+  if (Tag_val(from) > No_scan_tag) {
     i = Wosize_val(to);
   }
   else if (Tag_val(from) == Closure_tag) {
@@ -539,51 +540,4 @@ CAMLprim value caml_weak_blit (value es, value ofs,
                       value ed, value ofd, value len)
 {
   return caml_ephe_blit_key (es, ofs, ed, ofd, len);
-}
-
-value caml_ephe_list_tail(value e)
-{
-  value last = 0;
-  while (e != 0) {
-    CAMLassert (Tag_val(e) == Abstract_tag);
-    last = e;
-    e = Ephe_link(e);
-  }
-  return last;
-}
-
-value caml_ephe_list_cons(value e, value li)
-{
-  Ephe_link(e) = li;
-  return e;
-}
-
-value caml_ephe_list_append_seg(value first, value last, value back)
-{
-  if (first == 0) return back;
-  Ephe_link(last) = back;
-  return first;
-}
-
-value caml_ephe_list_append(value front, value back)
-{
-  return caml_ephe_list_append_seg(front, caml_ephe_list_tail(front), back);
-}
-
-void caml_ephe_list_cons_inplace(value e, value *li)
-{
-  *li = caml_ephe_list_cons(e, *li);
-}
-
-void caml_ephe_list_append_inplace(value e, value *li)
-{
-  *li = caml_ephe_list_append(e, *li);
-}
-
-value caml_ephe_list_pop(value *li)
-{
-  CAMLassert(*li != (value)NULL);
-  value head = *li;
-  *li = Ephe_link(head);
-  return head;
 }

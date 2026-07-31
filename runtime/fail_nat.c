@@ -49,8 +49,7 @@ extern caml_generated_constant
   caml_exn_Sys_blocked_io,
   caml_exn_Stack_overflow,
   caml_exn_Assert_failure,
-  caml_exn_Undefined_recursive_module,
-  caml_exn_Todo;
+  caml_exn_Undefined_recursive_module;
 
 /* Exception raising */
 
@@ -182,6 +181,5 @@ void caml_array_bound_error_asm(void)
 int caml_is_special_exception(value exn) {
   return exn == (value) caml_exn_Match_failure
     || exn == (value) caml_exn_Assert_failure
-    || exn == (value) caml_exn_Undefined_recursive_module
-    || exn == (value) caml_exn_Todo;
+    || exn == (value) caml_exn_Undefined_recursive_module;
 }

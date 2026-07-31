@@ -52,7 +52,7 @@
 #include "caml/winsupport.h"
 #include "caml/startup_aux.h"
 #include "caml/platform.h"
-#include "misc_internals.h"
+
 #include "caml/config.h"
 
 #if defined(SUPPORT_DYNAMIC_LINKING) && !defined(BUILDING_LIBCAMLRUNS)
@@ -81,7 +81,7 @@ CAMLnoret static void caml_win32_sys_error(int errnum)
                     errnum,
                     0,
                     buffer,
-                    countof(buffer),
+                    sizeof(buffer)/sizeof(wchar_t),
                     NULL)) {
     msg = caml_copy_string_of_utf16(buffer);
   } else {
@@ -249,7 +249,7 @@ void * caml_globalsym(const char * name)
   return flexdll_dlsym(flexdll_wdlopen(NULL,0), name);
 }
 
-const char * caml_dlerror(void)
+char * caml_dlerror(void)
 {
   return flexdll_dlerror();
 }
@@ -275,7 +275,7 @@ void * caml_globalsym(const char * name)
   return NULL;
 }
 
-const char * caml_dlerror(void)
+char * caml_dlerror(void)
 {
   return "dynamic loading not supported on this platform";
 }
@@ -556,7 +556,7 @@ static LONG CALLBACK
       faulting_address = exn_info->ExceptionRecord->ExceptionInformation[1];
 
       /* call caml_reset_stack(faulting_address) using the alternate stack */
-      alt_esp  = win32_alt_stack + countof(win32_alt_stack);
+      alt_esp  = win32_alt_stack + sizeof(win32_alt_stack) / sizeof(uintnat);
       *--alt_esp = faulting_address;
       *ctx_sp = (uintnat) (alt_esp - 1);
       *ctx_ip = (uintnat) &caml_reset_stack;
@@ -588,7 +588,7 @@ static LONG CALLBACK
       Caml_state->young_ptr = (value *) ctx->R15;
 
       /* call caml_reset_stack(faulting_address) using the alternate stack */
-      alt_rsp  = win32_alt_stack + countof(win32_alt_stack);
+      alt_rsp  = win32_alt_stack + sizeof(win32_alt_stack) / sizeof(uintnat);
       ctx->Rcx = faulting_address;
       ctx->Rsp = (uintnat) (alt_rsp - 4 - 1);
       ctx->Rip = (uintnat) &caml_reset_stack;
@@ -1264,7 +1264,6 @@ static const struct error_entry win_error_table[] = {
     ERROR_SHARING_BUFFER_EXCEEDED - ERROR_WRITE_PROTECT,
     EACCES },
   { ERROR_PRIVILEGE_NOT_HELD, 0, EPERM},
-  { ERROR_DIRECTORY, 0, ENOTDIR },
   { WSAEINVAL, 0, EINVAL },
   { WSAEACCES, 0, EACCES },
   { WSAEBADF, 0, EBADF },

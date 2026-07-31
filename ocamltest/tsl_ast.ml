@@ -26,20 +26,16 @@ type environment_statement =
   | Include of string located (* include named environment *)
   | Unset of string located (* clear environment variable *)
 
-type action = {
-  name: string located;
-  modifiers: string located list;
-}
-
-type statement =
+type tsl_item =
   | Environment_statement of environment_statement located
-  | Action of action
-  | Not of statement
-  | And of statement * statement
-  | Or of statement * statement
-  | If of statement * statement * statement option
+  | Test of
+    int (* test depth *) *
+    string located (* test name *) *
+    string located list (* environment modifiers *)
 
-type t = Ast of statement list * t list
+type tsl_block = tsl_item list
+
+type t = Ast of tsl_item list * t list
 
 let rec split_env l =
   match l with

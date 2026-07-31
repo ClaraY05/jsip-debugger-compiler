@@ -16,31 +16,19 @@
 
 # Commands to run for the 'other-configs' job on Inria's CI
 
+# Stop on error
+set -e
+
 mainjob=./tools/ci/inria/main
+main="${mainjob} -j8"
 
-build() {
-  name="$1"
-  shift
-  echo "==== $name ==== (`date`)"
-  t=$(mktemp)
-  if $mainjob -j8 $* >"$t" 2>&1
-  then :
-  else
-    cat "$t"
-    echo "==== Failure: $name"
-    echo "==== Configuration: $*"
-    exit 2
-  fi
-  rm -f "$t"
-}
-
+echo "============== minimal build ================= `date`"
 # The "MIN_BUILD" (formerly on Travis) builds with everything disabled (apart
 # from ocamltest). Its goals:
 #  - Ensure that the system builds correctly without native compilation
 #  - Ensure ocamltest builds correctly without Unix
 #  - Ensure the testsuite runs correctly with everything switched off
-build "minimal build" \
-        -conf --disable-native-compiler \
+${main} -conf --disable-native-compiler \
         -conf --disable-native-toplevel \
         -conf --disable-shared \
         -conf --disable-debug-runtime \
@@ -52,23 +40,22 @@ build "minimal build" \
         -conf --disable-dependency-generation \
         -no-native
 
-build "no flat float arrays, clang, C23" \
-        -conf --disable-flat-float-array \
+echo "============== no flat float arrays, clang, C23 ================= `date`"
+${main} -conf --disable-flat-float-array \
         -conf CC=clang-18 \
         -conf CFLAGS=-std=gnu2x
 
-build "flambda" \
-        -conf --enable-flambda
+echo "============== flambda ================= `date`"
+${main} -conf --enable-flambda
 
-build "frame pointers, reserved header bits" \
-        -conf --enable-frame-pointers \
-        -conf --enable-reserved-header-bits=27
+echo "============== frame pointers, reserved header bits =================\
+ `date`"
+${main} -conf --enable-frame-pointers -conf --enable-reserved-header-bits=27
 
-build "bootstrap, pic" \
-        -with-bootstrap -conf --with-pic
+echo "============== bootstrap, pic ================= `date`"
+${main} -with-bootstrap -conf --with-pic
 
-OCAMLRUNPARAM="c=1" \
-build "cleanup at exit, clang" \
-        -conf CC=clang-18
+echo "============== cleanup at exit, clang ================= `date`"
+OCAMLRUNPARAM="c=1" ${main} -conf CC=clang-18
 
-echo "==== done (`date`)"
+echo "============== done ================= `date`"

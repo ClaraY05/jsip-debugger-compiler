@@ -110,9 +110,6 @@ let update_loc lexbuf opt_file line =
     Lexing.pos_bol = pos.Lexing.pos_cnum;
   }
 
-let pos_pair_of_lexbuf lexbuf =
-  (Lexing.lexeme_start_p lexbuf, Lexing.lexeme_end_p lexbuf)
-
 type string_context = Pattern | Action | Comment
 }
 
@@ -156,8 +153,8 @@ rule main = parse
   | ident
     { match Lexing.lexeme lexbuf with
         "rule" -> Trule
-      | "parse" -> Tparse (Lexing.lexeme_start_p lexbuf)
-      | "shortest" -> Tparse_shortest (Lexing.lexeme_start_p lexbuf)
+      | "parse" -> Tparse
+      | "shortest" -> Tparse_shortest
       | "and" -> Tand
       | "eof" -> Teof
       | "let" -> Tlet
@@ -190,10 +187,14 @@ rule main = parse
         (Printf.sprintf "illegal escape sequence \\%c" c)
     }
   | '{'
-    { let start_p = Lexing.lexeme_end_p lexbuf in
-      let (action_end_p, clause_end_p) =
-        handle_lexical_error action [] lexbuf in
-      Taction (location_of_positions start_p action_end_p, clause_end_p) }
+    { let p = Lexing.lexeme_end_p lexbuf in
+      let f = p.Lexing.pos_fname in
+      let n1 = p.Lexing.pos_cnum
+      and l1 = p.Lexing.pos_lnum
+      and s1 = p.Lexing.pos_bol in
+      let n2 = handle_lexical_error action [] lexbuf in
+      Taction({loc_file = f; start_pos = n1; end_pos = n2;
+               start_line = l1; start_col = n1 - s1}) }
   | '='  { Tequal }
   | '|'  { Tor }
   | '['  { Tlbracket }
@@ -319,7 +320,7 @@ and action stk = parse
       | _ -> raise_lexical_error lexbuf "Unmatched ) in action" }
   | '}'
     { match stk with
-      | [] -> pos_pair_of_lexbuf lexbuf
+      | [] -> Lexing.lexeme_start lexbuf
       | '{' :: stk' -> action stk' lexbuf
       | _ -> raise_lexical_error lexbuf "Unmatched } in action" }
   | '"'

@@ -73,8 +73,6 @@ let init_path ?(standard_library=Config.standard_library)
 let initial_env () =
   Ident.reinit();
   Types.Uid.reinit();
-  Types.reset();
-  Ctype.reset();
   let initially_opened_module =
     if !Clflags.nopervasives then
       None

@@ -326,7 +326,7 @@ code_t caml_next_frame_pointer(value* stack_high, value ** sp,
    dynamically grow the allocated space as required. */
 
 static size_t get_callstack(value* sp, intnat trap_spoff,
-                            const struct stack_info* const stack,
+                            struct stack_info* stack,
                             intnat max_slots,
                             backtrace_slot **backtrace_p,
                             size_t *alloc_size_p)
@@ -341,7 +341,7 @@ static size_t get_callstack(value* sp, intnat trap_spoff,
   while (slots < max_slots) {
     code_t p = caml_next_frame_pointer(stack_high, &sp, &trap_spoff);
     if (!p) {
-      if (!parent || parent == stack) break;
+      if (!parent) break;
       sp = parent->sp;
       trap_spoff = Long_val(sp[0]);
       stack_high = Stack_high(parent);
@@ -419,18 +419,17 @@ CAMLprim value caml_get_continuation_callstack (value cont, value max_frames)
   backtrace_slot *backtrace = NULL;
   size_t trace_size = 0;
   size_t slots;
-  struct stack_info *cont_tail, *cont_head;
+  struct stack_info *stack;
   value *sp;
 
-  cont_tail = Ptr_val(caml_continuation_use(cont));
-  cont_head = Stack_parent(cont_tail);
+  stack = Ptr_val(caml_continuation_use(cont));
   {
     CAMLnoalloc; /* GC must not see the stack outside the cont */
-    sp = cont_head->sp;
+    sp = stack->sp;
     slots = get_callstack(sp, Long_val(sp[0]),
-                          cont_head, Long_val(max_frames),
+                          stack, Long_val(max_frames),
                           &backtrace, &trace_size);
-    caml_continuation_replace(cont, cont_tail);
+    caml_continuation_replace(cont, stack);
   }
 
   return alloc_callstack(backtrace, slots);

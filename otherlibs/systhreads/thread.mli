@@ -34,10 +34,6 @@ val create : ('a -> 'b) -> 'a -> t
    result of the application [funct arg] is discarded and not
    directly accessible to the parent thread.
 
-   Note that an option [S] can be passed to OCAMLRUNPARAM to configure
-   the minimum system stack size for new threads, which can be useful for
-   threads that call FFI code that needs a larger system stack.
-
    See also {!Domain.spawn} if you want parallel execution instead.
    *)
 
@@ -90,7 +86,7 @@ val exit : unit -> unit
 
 val delay: float -> unit
 (** [delay d] suspends the execution of the calling thread for
-   at least [d] seconds. The other program threads continue to run during
+   [d] seconds. The other program threads continue to run during
    this time. *)
 
 val join : t -> unit

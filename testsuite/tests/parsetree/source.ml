@@ -1155,8 +1155,6 @@ type my_record  =
      b: string list;
     }
 
-let copy_with_b f b = { f () with b }
-
 let my_record =
   let fields =
     [
@@ -3085,7 +3083,7 @@ Error: Types marked with the immediate attribute must be
    be used in function definition, match clauses, and let ... in.
 
    New: implicit pack is also supported, and you only need to be able
-   to infer the module type path from the context.
+   to infer the the module type path from the context.
  *)
 (* ocaml -principal *)
 

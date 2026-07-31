@@ -1,7 +1,7 @@
 (* TEST
  include systhreads;
  hassysthreads;
- not tsan; (* See https://github.com/ocaml-multicore/ocaml-tsan/issues/31 *)
+ no-tsan; (* See https://github.com/ocaml-multicore/ocaml-tsan/issues/31 *)
  {
    bytecode;
  }{

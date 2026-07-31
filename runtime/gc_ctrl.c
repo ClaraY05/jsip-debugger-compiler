@@ -39,7 +39,6 @@
 #include "caml/startup.h"
 #include "caml/fail.h"
 #include "caml/callback.h"
-#include "misc_internals.h"
 #include <string.h>
 
 atomic_uintnat caml_max_stack_wsize;
@@ -52,6 +51,7 @@ extern _Atomic uintnat caml_custom_minor_ratio; /* see custom.c */
 extern _Atomic uintnat caml_custom_minor_max_bsz; /* see custom.c */
 extern uintnat caml_minor_heap_max_wsz; /* see domain.c */
 extern atomic_uintnat caml_mark_stack_prune_factor; /* see major_gc.c */
+extern atomic_uintnat caml_cache_stacks_per_class; /* see fiber.c */
 
 CAMLprim value caml_gc_quick_stat(value v)
 {
@@ -377,19 +377,6 @@ CAMLprim value caml_runtime_variant (value unit)
 #endif
 }
 
-atomic_bool caml_runtime_hashtbl_randomized = false;
-
-CAMLprim value caml_runtime_hashtbl_randomize(value vunit)
-{
-  caml_runtime_hashtbl_randomized = true;
-  return Val_unit;
-}
-
-CAMLprim value caml_runtime_hashtbl_is_randomized(value vunit)
-{
-  return Val_bool(caml_runtime_hashtbl_randomized);
-}
-
 static char *format_gc_tweaks(void);
 CAMLprim value caml_runtime_parameters (value unit)
 {
@@ -398,10 +385,10 @@ CAMLprim value caml_runtime_parameters (value unit)
 
   CAMLassert (unit == Val_unit);
   char *tweaks = format_gc_tweaks();
-  const char *no_tweaks = "";
+  char *no_tweaks = "";
   value res = caml_alloc_sprintf
       ("b=%d,c=%"F_Z",e=%"F_Z",l=%"F_Z",M=%"F_Z",m=%"F_Z",n=%"F_Z","
-       "o=%"F_Z",p=%d,R=%d,s=%"F_S",t=%"F_Z",v=%"F_Z",V=%"F_Z",W=%"F_Z"%s",
+       "o=%"F_Z",p=%d,s=%"F_S",t=%"F_Z",v=%"F_Z",V=%"F_Z",W=%"F_Z"%s",
        /* b */ (int) Caml_state->backtrace_active,
        /* c */ caml_params->cleanup_on_exit,
        /* e */ caml_params->runtime_events_log_wsize,
@@ -411,7 +398,7 @@ CAMLprim value caml_runtime_parameters (value unit)
        /* n */ caml_custom_minor_max_bsz,
        /* o */ caml_percent_free,
        /* p */ Caml_state->parser_trace,
-       /* R */ caml_runtime_hashtbl_randomized,
+       /* R */ /* missing */
        /* s */ Caml_state->minor_heap_wsz,
        /* t */ caml_params->trace_level,
        /* v */ caml_verb_gc,
@@ -528,19 +515,21 @@ static struct gc_tweak gc_tweaks[] = {
 #define TWEAK(v) { #v, &caml_##v, 0 }
   TWEAK(mark_stack_prune_factor),
   TWEAK(small_heap_limit),
+  TWEAK(cache_stacks_per_class),
 #undef TWEAK
 };
+enum {N_GC_TWEAKS = sizeof(gc_tweaks)/sizeof(gc_tweaks[0])};
 
 void caml_init_gc_tweaks(void)
 {
-  for (size_t i = 0; i < countof(gc_tweaks); i++) {
+  for (int i = 0; i < N_GC_TWEAKS; i++) {
     gc_tweaks[i].initial_value = *gc_tweaks[i].ptr;
   }
 }
 
 void caml_print_gc_tweaks(void)
 {
-  for (size_t i = 0; i < countof(gc_tweaks); i++) {
+  for (int i = 0; i < N_GC_TWEAKS; i++) {
     fprintf(stderr, "%s (initial value %" CAML_PRIuNAT ")\n",
         gc_tweaks[i].name,
         gc_tweaks[i].initial_value);
@@ -549,7 +538,7 @@ void caml_print_gc_tweaks(void)
 
 atomic_uintnat* caml_lookup_gc_tweak(const char* name, uintnat len)
 {
-  for (size_t i = 0; i < countof(gc_tweaks); i++) {
+  for (int i = 0; i < N_GC_TWEAKS; i++) {
     if (strlen(gc_tweaks[i].name) == len &&
         memcmp(gc_tweaks[i].name, name, len) == 0) {
       return gc_tweaks[i].ptr;
@@ -584,7 +573,7 @@ CAMLprim value caml_gc_tweak_list_active(value unit)
   CAMLparam1(unit);
   CAMLlocal3(list, name, pair);
   list = Val_emptylist;
-  for (size_t i = countof(gc_tweaks); i-- > 0; ) {
+  for (int i = N_GC_TWEAKS - 1; i >= 0; i--) {
     if (*gc_tweaks[i].ptr != gc_tweaks[i].initial_value) {
       name = caml_copy_string(gc_tweaks[i].name);
       pair = caml_alloc_2(0, name, Val_long((long)*gc_tweaks[i].ptr));
@@ -600,7 +589,7 @@ CAMLprim value caml_gc_tweak_list_active(value unit)
 static char *format_gc_tweaks(void)
 {
   size_t len = 0;
-  for (size_t i = 0; i < countof(gc_tweaks); i++) {
+  for (size_t i = 0; i < N_GC_TWEAKS; i++) {
     uintnat val = *gc_tweaks[i].ptr;
     if (val != gc_tweaks[i].initial_value) {
       len += (2 /* ',X' */
@@ -621,7 +610,7 @@ static char *format_gc_tweaks(void)
   }
   char *p = buf;
 
-  for (size_t i = 0; i < countof(gc_tweaks); i++) {
+  for (size_t i = 0; i < N_GC_TWEAKS; i++) {
     uintnat val = *gc_tweaks[i].ptr;
     if (val != gc_tweaks[i].initial_value) {
       int item_len = snprintf(p, len, ",X%s=%"CAML_PRIuNAT,

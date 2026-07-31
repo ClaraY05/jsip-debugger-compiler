@@ -47,9 +47,6 @@ let mk_binannot_occurrences f =
     features such as project-wide occurrences. This flag has\n\
     no effect in the absence of '-bin-annot'."
 
-let mk_bytecode_hints f =
-  "-bytecode-hints", Arg.Unit f, " Include bytecode hints in executable"
-
 let mk_c f =
   "-c", Arg.Unit f, " Compile only (do not link)"
 
@@ -481,9 +478,6 @@ let mk_shared f =
 
 let mk_short_paths f =
   "-short-paths", Arg.Unit f, " Shorten paths in types"
-
-let mk_typing_recovery f =
-  "-typing-recovery", Arg.Unit f, " Enable typing recovery"
 
 let mk_stdin f =
   "-stdin", Arg.Unit f, " Read script from standard input"
@@ -934,7 +928,6 @@ module type Compiler_options = sig
   val _without_runtime : unit -> unit
   val _set_runtime_default : string -> unit
   val _short_paths : unit -> unit
-  val _typing_recovery : unit -> unit
   val _thread : unit -> unit
   val _v : unit -> unit
   val _verbose : unit -> unit
@@ -983,7 +976,6 @@ module type Bytecomp_options = sig
   val _launch_method : string -> unit
   val _search_method : string -> unit
   val _output_complete_exe : unit -> unit
-  val _bytecode_hints : unit -> unit
 
   val _dinstr : unit -> unit
   val _dcamlprimc : unit -> unit
@@ -1101,7 +1093,6 @@ struct
     mk_annot F._annot;
     mk_binannot F._binannot;
     mk_binannot_occurrences F._binannot_occurrences;
-    mk_bytecode_hints F._bytecode_hints;
     mk_c F._c;
     mk_cc F._cc;
     mk_cclib F._cclib;
@@ -1171,7 +1162,6 @@ struct
     mk_safer_matching F._safer_matching;
     mk_set_runtime_default F._set_runtime_default;
     mk_short_paths F._short_paths;
-    mk_typing_recovery F._typing_recovery;
     mk_strict_sequence F._strict_sequence;
     mk_no_strict_sequence F._no_strict_sequence;
     mk_strict_formats F._strict_formats;
@@ -1403,7 +1393,6 @@ struct
     mk_set_runtime_default F._set_runtime_default;
     mk_shared F._shared;
     mk_short_paths F._short_paths;
-    mk_typing_recovery F._typing_recovery;
     mk_strict_sequence F._strict_sequence;
     mk_no_strict_sequence F._no_strict_sequence;
     mk_strict_formats F._strict_formats;
@@ -1921,7 +1910,6 @@ module Default = struct
     let _version () = Compenv.print_version_string ()
     let _vnum () = Compenv.print_version_string ()
     let _where () = Compenv.print_standard_library ()
-    let _typing_recovery = set typing_recovery
     let _with_runtime = set with_runtime
     let _without_runtime = clear with_runtime
   end
@@ -2026,7 +2014,6 @@ third-party libraries such as Lwt, but with a different API."
 
     include Core
     include Compiler
-    let _bytecode_hints = set bytecode_hints
     let _compat_32 = set bytecode_compatible_32
     let _custom = set custom_runtime
     let _dcamlprimc = set keep_camlprimc_file

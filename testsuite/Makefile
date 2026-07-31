@@ -18,9 +18,7 @@
 BASEDIR := $(shell pwd)
 ifneq "$(words |$(BASEDIR)|)" "1"
 $(error The Testsuite does not handle spaces\
-   in the ocaml working directory path: $(BASEDIR).\
-   Rename the ocaml working directory path,\
-   then re-run configure and build again.)
+   in the ocaml working directory path: $(BASEDIR))
 endif
 
 ROOTDIR = ..

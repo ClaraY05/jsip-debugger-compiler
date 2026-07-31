@@ -13,11 +13,8 @@
 ;**************************************************************************
 
 (rule
- (target opcodes.ml)
- (mode   fallback)
- (deps   ../runtime/caml/opcodes.h)
+ (targets opcodes.ml)
+ (mode    fallback)
+ (deps    (:instr (file ../runtime/caml/instruct.h)))
  (action
-   (with-stdout-to %{target}
-     (system
-       "%{read-lines:../build-aux/cpp} -I ../runtime %{dep:opcodes.ml.c}"
-       ))))
+  (bash "%{dep:../tools/make_opcodes.exe} -opcodes < %{instr} > %{targets}")))

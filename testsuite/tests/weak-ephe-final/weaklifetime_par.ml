@@ -1,8 +1,6 @@
-(* TEST
-   skip;
-*)
 (* This test is currently disabled,
-   until the random failures have been investigated. *)
+   until the random failures have been investigated.
+*)
 
 let () = Random.self_init ()
 

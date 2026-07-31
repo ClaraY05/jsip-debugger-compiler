@@ -19,7 +19,7 @@ val skip_with_reason : string -> Actions.t
 
 val pass_or_skip
   : bool -> string -> string -> out_channel -> Environments.t
-         -> Test_result.t * Environments.t
+         -> Result.t * Environments.t
 
 val mkreason : string -> string -> int -> string
 
@@ -37,9 +37,9 @@ val readonly_files : Environments.t -> string list
 
 val setup_symlinks : string -> string -> string list -> unit
 
-val setup_build_env : add_testfile:bool -> string list -> Actions.code
+val setup_build_env : bool -> string list -> Actions.code
 
-val setup_simple_build_env : add_testfile:bool -> string list -> Actions.code
+val setup_simple_build_env : bool -> string list -> Actions.code
 
 val run_cmd :
   ?environment : string array ->
@@ -50,13 +50,8 @@ val run_cmd :
   ?timeout : int ->
   out_channel -> Environments.t -> string list -> int
 
-val run :
-  log_message:string ->
-  redirect_output:bool ->
-  can_skip:bool ->
-  prog:Variables.t ->
-  args:(Variables.t option) ->
-  Actions.code
+val run : string -> bool -> bool -> Variables.t
+                 -> Variables.t option -> Actions.code
 
 val run_program : Actions.code
 

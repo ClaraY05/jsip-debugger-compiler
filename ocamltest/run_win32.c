@@ -30,7 +30,6 @@
 
 #include "caml/memory.h"
 #include "caml/osdeps.h"
-#include "misc_internals.h"
 
 #include "run.h"
 #include "run_common.h"
@@ -46,7 +45,7 @@ static void report_error(
   if (FormatMessage(
     FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
     NULL, error, 0, windows_error_message,
-    countof(windows_error_message), NULL) ) {
+    sizeof(windows_error_message)/sizeof(WCHAR), NULL) ) {
     caml_error_message = caml_stat_strdup_of_utf16(windows_error_message);
   } else {
     caml_error_message = caml_stat_alloc(256);
@@ -257,7 +256,7 @@ if ( (condition) ) \
   goto cleanup; \
 } else { }
 
-static const WCHAR *translate_finename(const WCHAR *filename)
+static WCHAR *translate_finename(WCHAR *filename)
 {
   if (wcscmp(filename, L"/dev/null") == 0) return L"NUL"; else return filename;
 }
@@ -304,7 +303,7 @@ int run_command(const command_settings *settings)
 
   if (is_defined(settings->stdin_filename))
   {
-    const WCHAR *stdin_filename = translate_finename(settings->stdin_filename);
+    WCHAR *stdin_filename = translate_finename(settings->stdin_filename);
     startup_info.hStdInput = create_input_handle(stdin_filename);
     checkerr( (startup_info.hStdInput == INVALID_HANDLE_VALUE),
       "Could not redirect standard input",
@@ -314,8 +313,7 @@ int run_command(const command_settings *settings)
 
   if (is_defined(settings->stdout_filename))
   {
-    const WCHAR *stdout_filename =
-      translate_finename(settings->stdout_filename);
+    WCHAR *stdout_filename = translate_finename(settings->stdout_filename);
     startup_info.hStdOutput = create_output_handle(
       stdout_filename, settings->append
     );
@@ -339,8 +337,7 @@ int run_command(const command_settings *settings)
 
     if (! stderr_redirected)
     {
-      const WCHAR *stderr_filename =
-        translate_finename(settings->stderr_filename);
+      WCHAR *stderr_filename = translate_finename(settings->stderr_filename);
       startup_info.hStdError = create_output_handle
       (
         stderr_filename, settings->append

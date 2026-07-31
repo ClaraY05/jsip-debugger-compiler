@@ -1,6 +1,6 @@
 (* TEST
  modules = "test3_.c";
- not tsan; (* TSan does not support call stacks bigger than 64k frames *)
+ no-tsan; (* TSan does not support call stacks bigger than 64k frames *)
  {
    bytecode;
  }{

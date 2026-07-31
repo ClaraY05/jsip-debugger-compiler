@@ -19,11 +19,10 @@ Line 1, characters 12-77:
                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Error: In the signature of this functor application:
        The definition of "Fixed.t" contains a cycle:
-         "Fixed.t" = "F(Fixed).t",
          "F(Fixed).t" = "Fixed.t option",
-         "Fixed.t option" contains "Fixed.t"
-|}, Rectypes{|
-module T1 : sig module rec Fixed : sig type t = Fixed.t option end end
+         "Fixed.t option" contains "Fixed.t",
+         "Fixed.t" = "F(Fixed).t",
+         "F(Fixed).t" = "Fixed.t option"
 |}]
 module T2 = Fix(functor (X:sig type t end) -> struct type t = X.t end);;
 [%%expect{|
@@ -32,6 +31,7 @@ Line 1, characters 12-70:
                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Error: In the signature of this functor application:
        The definition of "Fixed.t" contains a cycle:
+         "F(Fixed).t" = "Fixed.t",
          "Fixed.t" = "F(Fixed).t",
          "F(Fixed).t" = "Fixed.t"
 |}]
@@ -74,6 +74,7 @@ Line 1, characters 18-38:
                       ^^^^^^^^^^^^^^^^^^^^
 Error: In this instantiated signature:
        The definition of "Fixed.t" contains a cycle:
+         "F(Fixed).t" = "Fixed.t",
          "Fixed.t" = "F(Fixed).t",
          "F(Fixed).t" = "Fixed.t"
 |}]
@@ -86,6 +87,7 @@ Line 1, characters 11-18:
                ^^^^^^^
 Error: In the signature of this functor application:
        The definition of "Fixed.t" contains a cycle:
+         "Id(Fixed).t" = "Fixed.t",
          "Fixed.t" = "Id(Fixed).t",
          "Id(Fixed).t" = "Fixed.t"
 |}]
@@ -96,6 +98,7 @@ Line 1, characters 9-16:
              ^^^^^^^
 Error: In the signature of Fix(Id):
        The definition of "Fixed.t" contains a cycle:
+         "Id(Fixed).t" = "Fixed.t",
          "Fixed.t" = "Id(Fixed).t",
          "Id(Fixed).t" = "Fixed.t"
 |}]
@@ -106,6 +109,7 @@ Line 1, characters 11-18:
                ^^^^^^^
 Error: In the signature of Fix(Id):
        The definition of "Fixed.t" contains a cycle:
+         "Id(Fixed).t" = "Fixed.t",
          "Fixed.t" = "Id(Fixed).t",
          "Id(Fixed).t" = "Fixed.t"
 |}]
@@ -121,6 +125,7 @@ module M : sig val f : Fix(Id).Fixed.t -> Fix(Id).Fixed.t end
 Line 1:
 Error: In the signature of Fix(Id):
        The definition of "Fixed.t" contains a cycle:
+         "Id(Fixed).t" = "Fixed.t",
          "Fixed.t" = "Id(Fixed).t",
          "Id(Fixed).t" = "Fixed.t"
 |}]
@@ -155,6 +160,7 @@ Line 5, characters 11-19:
                ^^^^^^^^
 Error: In the signature of Fix2(Id):
        The definition of "Fixed.t" contains a cycle:
+         "Id(Fixed).t" = "Fixed.t",
          "Fixed.t" = "Id(Fixed).t",
          "Id(Fixed).t" = "Fixed.t"
 |}]

@@ -23,16 +23,8 @@
 typedef enum {
   Phase_sweep_main,
   Phase_sweep_and_mark_main,
-  /* Sweeping and marking takes place, including ephemeron marking. */
-
   Phase_mark_final,
-  /* Values with "first finalisers" (registered by Gc.finalise) are
-   * identified to be run, marking their values. This may cause
-   * further marking, and ephemeron marking. */
-
   Phase_sweep_ephe
-  /* All marking has been finished. Ephemerons are swept and "last
-   * finalisers" (Gc.finalise_last) are identified to be run. */
 } gc_phase_t;
 
 extern gc_phase_t caml_gc_phase;
@@ -40,13 +32,6 @@ extern gc_phase_t caml_gc_phase;
 Caml_inline int caml_marking_started(void)
 {
   return caml_gc_phase != Phase_sweep_main;
-}
-
-Caml_inline bool caml_ephe_marking_ongoing(void)
-{
-  return
-    caml_marking_started()
-    && caml_gc_phase != Phase_sweep_ephe;
 }
 
 extern atomic_uintnat caml_gc_mark_phase_requested;

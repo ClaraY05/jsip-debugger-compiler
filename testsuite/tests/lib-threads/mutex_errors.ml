@@ -1,7 +1,7 @@
 (* TEST
  include systhreads;
  hassysthreads;
- not tsan; (* tsan detects the mutex errors and fails *)
+ no-tsan; (* tsan detects the mutex errors and fails *)
  {
    bytecode;
  }{

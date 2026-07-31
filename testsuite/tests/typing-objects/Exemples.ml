@@ -34,6 +34,8 @@ p#get_x;;
 let q = Oo.copy p;;
 [%%expect{|
 val q : point = <obj>
+|}, Principal{|
+val q : < get_x : int; move : int -> unit > = <obj>
 |}];;
 
 q#move 7; p#get_x, q#get_x;;
@@ -177,6 +179,9 @@ let (c, c') = (new circle p, new circle p');;
 [%%expect{|
 val c : point circle = <obj>
 val c' : color_point circle = <obj>
+|}, Principal{|
+val c : point circle = <obj>
+val c' : < color : string; get_x : int; move : int -> unit > circle = <obj>
 |}];;
 
 class ['a] color_circle c = object
@@ -541,9 +546,9 @@ Error: Type
          "int_comparable2" =
            "< cmp : int_comparable2 -> int; set_x : int -> unit; x : int >"
        is not a subtype of
-         "int_comparable" =
-           "< cmp : < cmp : 'a; x : int > -> int as 'a; x : int >"
-       Type "< cmp : 'b -> int; x : int > as 'b" is not a subtype of
+         "int_comparable" = "< cmp : int_comparable -> int; x : int >"
+       Type "int_comparable" = "< cmp : int_comparable -> int; x : int >"
+       is not a subtype of
          "int_comparable2" =
            "< cmp : int_comparable2 -> int; set_x : int -> unit; x : int >"
        The first object type has no method "set_x"
@@ -588,9 +593,7 @@ Error: The value "c3" has type
            "< cmp : int_comparable -> int; setx : int -> unit; x : int >"
        but an expression was expected of type
          "#comparable as 'a" = "< cmp : 'a -> int; .. >"
-       Type
-         "int_comparable" =
-           "< cmp : < cmp : 'b; x : int > -> int as 'b; x : int >"
+       Type "int_comparable" = "< cmp : int_comparable -> int; x : int >"
        is not compatible with type
          "#comparable as 'a" = "< cmp : 'a -> int; .. >"
        The first object type has no method "setx"

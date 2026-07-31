@@ -39,7 +39,7 @@
 #include "caml/signals.h"
 #include "caml/intext.h"
 #include "caml/startup.h"
-#include "misc_internals.h"
+
 #include "build_config.h"
 
 #ifndef O_BINARY
@@ -134,7 +134,7 @@ CAMLexport char_os * caml_parse_ld_conf(const char_os * stdlib,
 
   /* Use a temporary ext_table to hold the individually-allocated entries */
   caml_ext_table_init(&entries, 8);
-  for (int i = 0; i < countof(locations); i++) {
+  for (int i = 0; i < sizeof(locations) / sizeof(locations[0]); i++) {
     if (locations[i] != NULL) {
       libroot = caml_stat_strdup_os(locations[i]);
       size_t libroot_length = strlen_os(libroot);
@@ -342,7 +342,7 @@ CAMLprim value caml_dynlink_get_bytecode_sections(value unit)
     const char* sec_names[] = {"SYMB", "CRCS"};
     tbl = caml_input_value_from_block(caml_params->section_table,
                                       caml_params->section_table_size);
-    for (int i = 0; i < countof(sec_names); i++) {
+    for (int i = 0; i < sizeof(sec_names)/sizeof(sec_names[0]); i++) {
       for (int j = 0; j < Wosize_val(tbl); j++) {
         value kv = Field(tbl, j);
         if (!strcmp(sec_names[i], String_val(Field(kv, 0))))

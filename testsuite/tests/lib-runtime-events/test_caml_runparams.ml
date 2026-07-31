@@ -1,12 +1,10 @@
 (* TEST
  include runtime_events;
- ocamlrunparam += ",e=5";
+ ocamlrunparam += ",e=4";
 *)
 
 (* We set the ring buffer size smaller and witness that we do indeed
-   lose events. (Was e=4, now e=5. Still small enough but makes the
-   test not fatal-error with the instrumented runtime's larger
-   messages.) *)
+   lose events. *)
 open Runtime_events
 
 let lost_any_events = ref false

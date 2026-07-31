@@ -36,16 +36,15 @@ let mkenvstmt envstmt =
 %token <[`Above | `Below]> TSL_BEGIN_OCAML_STYLE
 %token TSL_END_OCAML_STYLE
 %token COMMA LEFT_BRACE RIGHT_BRACE SEMI
-%token LEFT_PAREN RIGHT_PAREN
-%token AND OR NOT
-%token IF THEN ELSE
+%token <int> TEST_DEPTH
 %token EQUAL PLUSEQUAL
 /* %token COLON */
 %token INCLUDE SET UNSET WITH
 %token <string> IDENTIFIER
 %token <string> STRING
 
-%start tsl_script
+%start tsl_block tsl_script
+%type <Tsl_ast.tsl_block> tsl_block
 %type <Tsl_ast.t> tsl_script
 
 %%
@@ -64,40 +63,28 @@ statement_list:
 | { [] }
 | statement statement_list { $1 :: $2 }
 
-action:
-| identifier with_environment_modifiers { { name = $1; modifiers = $2 } }
-
-test:
-| test_if { $1 }
-
-test_if:
-| IF test_or THEN test_or { If ($2, $4, None) }
-| IF test_or THEN test_or ELSE test_if { If ($2, $4, Some $6) }
-| test_or { $1 }
-
-test_or:
-| test_and OR test_or { Or ($1, $3) }
-| test_and { $1 }
-
-test_and:
-| test_not AND test_and { And ($1, $3) }
-| test_not { $1 }
-
-test_not:
-| NOT test_atom { Not $2 }
-| test_atom { $1 }
-
-test_atom:
-| env_item { mkenvstmt $1 }
-| action   { Action $1 }
-| LEFT_PAREN test RIGHT_PAREN { $2 }
-
 statement:
-| test SEMI { $1 }
+| env_item SEMI { $1 }
+| identifier with_environment_modifiers SEMI { Test (0, $1, $2) }
 
 tsl_script:
 | TSL_BEGIN_C_STYLE node TSL_END_C_STYLE { $2 }
 | TSL_BEGIN_OCAML_STYLE node TSL_END_OCAML_STYLE { $2 }
+
+tsl_block:
+| TSL_BEGIN_C_STYLE tsl_items TSL_END_C_STYLE { $2 }
+| TSL_BEGIN_OCAML_STYLE tsl_items TSL_END_OCAML_STYLE { $2 }
+
+tsl_items:
+| { [] }
+| tsl_item tsl_items { $1 :: $2 }
+
+tsl_item:
+| test_item { $1 }
+| env_item { $1 }
+
+test_item:
+  TEST_DEPTH identifier with_environment_modifiers { (Test ($1, $2, $3)) }
 
 with_environment_modifiers:
 | { [] }
@@ -109,16 +96,16 @@ opt_environment_modifiers:
 
 env_item:
 | identifier EQUAL string
-    { Assignment (false, $1, $3) }
+    { mkenvstmt (Assignment (false, $1, $3)) }
 | identifier PLUSEQUAL string
-    { Append ($1, $3) }
+    { mkenvstmt (Append ($1, $3)) }
 | SET identifier EQUAL string
-    { Assignment (true, $2, $4) }
+    { mkenvstmt (Assignment (true, $2, $4)) }
 | UNSET identifier
-    { Unset $2 }
+    { mkenvstmt (Unset $2) }
 
 | INCLUDE identifier
-  { Include $2 }
+  { mkenvstmt (Include $2) }
 
 identifier: IDENTIFIER { mkidentifier $1 }
 

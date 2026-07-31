@@ -47,19 +47,8 @@ let cppflags = make ("cppflags",
 let cc = make ("cc",
   "Command to use to invoke the C compiler")
 
-let outputobj = make ("outputobj",
-  "Exact string to prefix a call to cc -c to name the object")
-
 let cflags = make ("cflags",
   "Flags passed to the C compiler")
-
-let cxx = make ("cxx",
-  "Command to use to invoke the C++ compiler")
-
-let ccomp_type = make ("ccomp_type",
-  "The \"kind\" of the C compiler, assembler and linker used: one of \"cc\" \
-   (for Unix-style C compilers), or \"msvc\" (for Microsoft Visual C++ and \
-   MASM)")
 
 let caml_ld_library_path_name = "CAML_LD_LIBRARY_PATH"
 
@@ -166,9 +155,6 @@ let ocamlc_default_flags = make ("ocamlc_default_flags",
 
 
 
-let ocamllex_exit_status = make ("ocamllex_exit_status",
-  "Expected exit status of ocamllex")
-
 let ocamllex_flags = make ("ocamllex_flags",
   "Flags passed to ocamllex")
 
@@ -251,9 +237,6 @@ let sharedobjext =
   Variables.make ("sharedobjext",
     "Extension of shared object files")
 
-let system = make ("system",
-  "The type of the target system")
-
 let use_runtime =
   Variables.make ("use_runtime",
     "Whether the -use-runtime option should be used" )
@@ -268,8 +251,6 @@ let _ = List.iter register_variable
     cppflags;
     cc;
     cflags;
-    outputobj;
-    cxx;
     caml_ld_library_path;
     codegen_exit_status;
     compare_programs;
@@ -309,7 +290,6 @@ let _ = List.iter register_variable
     ocamlc_opt_exit_status;
     ocamlopt_opt_exit_status;
     ocamlrunparam;
-    ocamllex_exit_status;
     ocamllex_flags;
     ocamlyacc_flags;
     ocamldoc_flags;
@@ -323,6 +303,5 @@ let _ = List.iter register_variable
     plugins;
     shared_library_cflags;
     sharedobjext;
-    system;
     use_runtime;
   ]

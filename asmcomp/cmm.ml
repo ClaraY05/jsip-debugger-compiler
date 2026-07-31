@@ -169,7 +169,6 @@ and operation =
   | Craise of Lambda.raise_kind
   | Ccheckbound
   | Copaque
-  | Catomic_fetch_add
   | Cdls_get
   | Cpoll
 

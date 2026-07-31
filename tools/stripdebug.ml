@@ -25,7 +25,7 @@ let remove_CRCS = ref false
 
 let remove_section (s : Bytesections.Name.t) =
   match s with
-  | DBUG | HINT -> !remove_DBUG
+  | DBUG -> !remove_DBUG
   | CRCS -> !remove_CRCS
   | RNTM -> !remove_header
   | _ -> false

@@ -31,8 +31,6 @@ let cc = {@QS@|@CC@|@QS@}
 
 let cflags = {@QS@|@common_cflags@|@QS@}
 
-let cxx = {@QS@|@ocamltest_CXX@|@QS@}
-
 let ccomp_type = {@QS@|@ccomp_type@|@QS@}
 
 let c_compiler_vendor = {@QS@|@ocaml_cc_vendor@|@QS@}
@@ -91,8 +89,6 @@ let exe = {@QS@|@EXEEXT@|@QS@}
 let mkdll = {@QS@|@mkdll_exp@|@QS@}
 let mkexe = {@QS@|@mkexe_exp@|@QS@}
 
-let outputobj = {@QS@|@outputobj@|@QS@}
-
 let bytecc_libs = {@QS@|@zstd_libs@ @cclibs@|@QS@}
 
 let nativecc_libs = {@QS@|@cclibs@|@QS@}
@@ -110,5 +106,3 @@ let tsan = @tsan@
 let has_relative_libdir = @target_libdir_is_relative@
 
 let suffixing = @suffixing@
-
-let reserved_header_bits = @reserved_header_bits@

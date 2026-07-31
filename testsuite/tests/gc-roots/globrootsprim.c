@@ -22,52 +22,55 @@
 #include <caml/shared_heap.h>
 #include <caml/callback.h>
 
+struct block { value header; value v; };
+
+#define Block_val(v) ((struct block*) &((value*) v)[-1])
+#define Val_block(b) ((value) &((b)->v))
+
 value gb_get(value vblock)
 {
-  return Field(vblock, 0);
+  return Block_val(vblock)->v;
 }
 
 value gb_classic_register(value v)
 {
-  char *b = caml_stat_alloc(Bhsize_wosize(1));
-  value val = Val_hp(b);
-  Hd_hp(Hp_val(val)) = Make_header(1, 0, NOT_MARKABLE);
-  Field(val, 0) = v;
-  caml_register_global_root((value *)&Field(val, 0));
-  return val;
+  struct block * b = caml_stat_alloc(sizeof(struct block));
+  b->header = Make_header(1, 0, NOT_MARKABLE);
+  b->v = v;
+  caml_register_global_root(&(b->v));
+  return Val_block(b);
 }
 
 value gb_classic_set(value vblock, value newval)
 {
-  Field(vblock, 0) = newval;
+  Block_val(vblock)->v = newval;
   return Val_unit;
 }
 
 value gb_classic_remove(value vblock)
 {
-  caml_remove_global_root((value *)&Field(vblock, 0));
+  caml_remove_global_root(&(Block_val(vblock)->v));
   return Val_unit;
 }
 
 value gb_generational_register(value v)
 {
-  char * b = caml_stat_alloc(Bhsize_wosize(1));
-  value val = Val_hp(b);
-  Hd_hp(Hp_val(val)) = Make_header(1, 0, NOT_MARKABLE);
-  Field(val, 0) = v;
-  caml_register_generational_global_root((value *)&Field(val, 0));
-  return val;
+  struct block * b = caml_stat_alloc(sizeof(struct block));
+  b->header = Make_header(1, 0, NOT_MARKABLE);
+  b->v = v;
+  caml_register_generational_global_root(&(b->v));
+  return Val_block(b);
 }
 
 value gb_generational_set(value vblock, value newval)
 {
-  caml_modify_generational_global_root((value *)&Field(vblock, 0), newval);
+  caml_modify_generational_global_root(&(Block_val(vblock)->v), newval);
   return Val_unit;
 }
 
 value gb_generational_remove(value vblock)
 {
-  caml_remove_generational_global_root((value *)&Field(vblock, 0));
+  caml_remove_generational_global_root(&(Block_val(vblock)->v));
   return Val_unit;
 }
 

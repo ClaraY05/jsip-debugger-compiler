@@ -51,5 +51,3 @@ val ocamlmklib : string
 val codegen : string
 
 val asmgen_archmod : string
-
-val ocamltest : string

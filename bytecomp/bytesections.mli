@@ -25,7 +25,6 @@ module Name : sig
     | CRCS (** crcs for modules *)
     | DATA (** global data (constant) *)
     | DBUG (** debug info *)
-    | HINT (** hint info *)
     | DLLS (** dll names *)
     | DLPT (** dll paths *)
     | OSLD (** OCaml Standard Library Default location *)

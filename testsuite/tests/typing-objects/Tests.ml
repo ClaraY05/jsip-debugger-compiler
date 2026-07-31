@@ -18,7 +18,7 @@ end and ['a] d () = object
   inherit ['a] c ()
 end;;
 [%%expect{|
-class ['a] c : unit -> object constraint 'a = int method f : 'a c end
+class ['a] c : unit -> object constraint 'a = int method f : int c end
 and ['a] d : unit -> object constraint 'a = int method f : 'a c end
 |}];;
 (* class ['a] c : unit -> object constraint 'a = int method f : 'a c end *)
@@ -93,7 +93,7 @@ class ['a] c :
 |}];;
 new c;;
 [%%expect{|
-- : (< f : 'a > as 'a) -> 'a = <fun>
+- : ('a c as 'a) -> 'a = <fun>
 |}];;
 (* class ['a] c :
   'a -> object ('a) constraint 'a = < f : 'a; .. > method f : 'a end *)
@@ -219,21 +219,24 @@ and 'a d = <f : int c>;;
 type 'a c = < f : 'a c >
 and 'a d = < f : int c >
 |}];;
-(* succeeds with keep-expansion *)
 type 'a u = < x : 'a>
 and 'a t = 'a t u;;
 [%%expect{|
-type 'a u = < x : 'a >
-and 'a t = 'a t u
-|}];;
-(* fails since 4.04 *)
+Line 2, characters 0-17:
+2 | and 'a t = 'a t u;;
+    ^^^^^^^^^^^^^^^^^
+Error: The type abbreviation "t" is cyclic:
+         "'a t u" contains "'a t",
+         "'a t" = "'a t u",
+         "'a t u" contains "'a t"
+|}];; (* fails since 4.04 *)
 type 'a u = 'a
 and 'a t = 'a t u;;
 [%%expect{|
 Line 2, characters 0-17:
 2 | and 'a t = 'a t u;;
     ^^^^^^^^^^^^^^^^^
-Error: The definition of "t" contains a cycle:
+Error: The type abbreviation "t" is cyclic:
          "'a t" = "'a t u",
          "'a t u" = "'a t"
 |}];;
@@ -246,12 +249,10 @@ type t = t u * t u;;
 Line 1, characters 0-18:
 1 | type t = t u * t u;;
     ^^^^^^^^^^^^^^^^^^
-Error: The definition of "t" contains a cycle:
+Error: The type abbreviation "t" is cyclic:
          "t" = "t u * t u",
          "t u * t u" contains "t u",
          "t u" = "t"
-|}, Rectypes{|
-type t = t u * t u
 |}];;
 
 type t = <x : 'a> as 'a;;
@@ -264,11 +265,11 @@ type 'a u = 'a
 |}];;
 fun (x : t) (y : 'a u) -> x = y;;
 [%%expect{|
-- : t -> (< x : 'a > as 'a) -> bool = <fun>
+- : t -> t u -> bool = <fun>
 |}];;
 fun (x : t) (y : 'a u) -> y = x;;
 [%%expect{|
-- : t -> t -> bool = <fun>
+- : t -> t u -> bool = <fun>
 |}];;
 (* - : t -> t u -> bool = <fun> *)
 
@@ -665,7 +666,7 @@ class c : unit -> object method m : c end
 |}];;
 (new c ())#m;;
 [%%expect{|
-- : < m : 'a > as 'a = <obj>
+- : c = <obj>
 |}];;
 module M = struct class c () = object method m = new c () end end;;
 [%%expect{|
@@ -673,7 +674,7 @@ module M : sig class c : unit -> object method m : c end end
 |}];;
 (new M.c ())#m;;
 [%%expect{|
-- : < m : 'a > as 'a = <obj>
+- : M.c = <obj>
 |}];;
 
 type uu = A of int | B of (<leq: 'a> as 'a);;
@@ -816,7 +817,7 @@ type 'a t = < x : 'a >
 |}];;
 fun (x : 'a t as 'a) -> ();;
 [%%expect{|
-- : (< x : 'a > as 'a) -> unit = <fun>
+- : ('a t as 'a) -> unit = <fun>
 |}];;
 fun (x : 'a t) -> (x : 'a); ();;
 [%%expect{|
@@ -825,7 +826,7 @@ Line 1, characters 18-26:
                       ^^^^^^^^
 Warning 10 [non-unit-statement]: this expression should have type unit.
 
-- : (< x : 'a > as 'a) t -> unit = <fun>
+- : ('a t as 'a) t -> unit = <fun>
 |}];;
 fun ((x : 'a) | (x : 'a t)) -> ();;
 [%%expect{|
@@ -834,7 +835,7 @@ Line 1, characters 17-18:
                      ^
 Warning 12 [redundant-subpat]: this sub-pattern is unused.
 
-- : (< x : 'a > as 'a) -> unit = <fun>
+- : ('a t as 'a) -> unit = <fun>
 |}];;
 
 class ['a] c () = object
@@ -1019,7 +1020,12 @@ let o = object
   end;;
 [%%expect {|
 class ['a] c : object ('a) constraint 'a = < .. > end
-val o : < m : int > = <obj>
+Line 4, characters 14-25:
+4 |     inherit [ < m : int > ] c
+                  ^^^^^^^^^^^
+Error: The type parameter "< m : int >"
+       does not meet its constraint: it should be "< .. >"
+       Self type cannot be unified with a closed object type
 |}];;
 
 class type [ 'a ] d = object method a : 'a method b : 'a end
@@ -1045,7 +1051,7 @@ class type ['a] ct = object ('a) constraint 'a = < .. > end
 Line 2, characters 10-31:
 2 | class c : [ < a : int; ..> ] ct = object method a = 3 end;;
               ^^^^^^^^^^^^^^^^^^^^^
-Error: This non-virtual class type has undeclared virtual methods.
+Error: This non-virtual class has undeclared virtual methods.
        The following methods were not declared : "a"
 |}];;
 
@@ -1170,19 +1176,6 @@ class c = [ < foo : int; .. > ] p;;
 class ['a] p :
   object ('a) constraint 'a = < .. > method private foo : int end
 class c : object method foo : int end
-|}];;
-
-class ['a] p = object (_ : 'a) method private foo = 5 end;;
-class c = [ < foo : string; .. > ] p;;
-[%%expect {|
-class ['a] p :
-  object ('a) constraint 'a = < .. > method private foo : int end
-Line 2, characters 12-32:
-2 | class c = [ < foo : string; .. > ] p;;
-                ^^^^^^^^^^^^^^^^^^^^
-Error: The type parameter "< foo : string; .. >"
-       does not meet its constraint: it should be "< foo : int; .. >"
-       The method "foo" has type "string", but the expected method type was "int"
 |}];;
 
 (* Errors for undefined methods *)
@@ -1339,7 +1332,7 @@ class c : object method private test : unit end
 Line 6, characters 9-16:
 6 | let () = (new c)#test
              ^^^^^^^
-Error: This expression has type "c" = "<  >"
+Error: This expression has type "c"
        It has no method "test"
 |}];;
 
@@ -1369,7 +1362,7 @@ class c : object method private test : unit end
 Line 10, characters 9-16:
 10 | let () = (new c)#test
               ^^^^^^^
-Error: This expression has type "c" = "d"
+Error: This expression has type "c"
        It has no method "test"
 |}];;
 

@@ -6,12 +6,11 @@
 #include <string.h>
 
 #include <caml/mlvalues.h>
-#include "misc_internals.h"
+
+#define ARR_SIZE(a)    (sizeof(a) / sizeof(*(a)))
 
 #if defined(__APPLE__)
 #define RE_FUNC_NAME "^[[:digit:]]+[[:space:]]+[[:alnum:]_\\.]+[[:space:]]+0x[[:xdigit:]]+[[:space:]]([[:alnum:]_\\$]+).*$"
-#elif defined(__FreeBSD__) || defined(__DragonFly__)
-#define RE_FUNC_NAME  "^0x[[:xdigit:]]+ <(.+)\\+0x[[:xdigit:]]+>.*$"
 #else
 #define RE_FUNC_NAME  "^.*\\((.+)\\+0x[[:xdigit:]]+\\) \\[0x[[:xdigit:]]+\\]$"
 #endif
@@ -31,8 +30,6 @@ typedef struct frame_info
  * or this on macOS:
  * 0   c_call.opt                          0x000000010e621079 camlC_call.entry + 57
  *
- * or this on FreeBSD (or DragonFly):
- * 0x22eea7 <camlModule.fn_123+0xb7> at ./path/to/binary
  */
 static const char* backtrace_symbol(const struct frame_info* fi)
 {
@@ -56,12 +53,12 @@ static regmatch_t func_name_from_symbol(const char* symbol)
 
   err = regcomp(&regex, RE_FUNC_NAME, REG_EXTENDED);
   if (err) {
-    regerror(err, &regex, errbuf, countof(errbuf));
+    regerror(err, &regex, errbuf, ARR_SIZE(errbuf));
     fprintf(stderr, "regcomp: %s\n", errbuf);
     return match[0];
   }
 
-  err = regexec(&regex, symbol, countof(match), match, 0);
+  err = regexec(&regex, symbol, ARR_SIZE(match), match, 0);
   if (err == REG_NOMATCH)
     return match[0];
 
@@ -83,13 +80,13 @@ static regmatch_t trim_func_name(const char* symbol, const regmatch_t* funcname)
 
   err = regcomp(&regex, RE_TRIM_FUNC, REG_EXTENDED);
   if (err) {
-    regerror(err, &regex, errbuf, countof(errbuf));
+    regerror(err, &regex, errbuf, ARR_SIZE(errbuf));
     fprintf(stderr, "regcomp: %s\n", errbuf);
     return match[0];
   }
 
   match[0] = *funcname;
-  err = regexec(&regex, symbol, countof(match), match, REG_STARTEND);
+  err = regexec(&regex, symbol, ARR_SIZE(match), match, REG_STARTEND);
   if (err == REG_NOMATCH) {
     /* match[0] has already been overwritten to hold the function full name for
        regexec */
@@ -124,29 +121,18 @@ void fp_backtrace(CAMLunused value argv0)
 {
   const char* symbol = NULL;
 
-  for (struct frame_info *frame = __builtin_frame_address(0), *next = NULL;
-       frame;
-       frame = next) {
-#if defined(__riscv)
-    /* On RISC-V, __builtin_frame_address returns s0 = CFA, which points
-       past the frame record.  Subtract one record to reach {prev, retaddr}. */
-    frame--;
-#endif
-    next = frame->prev;
+  for (struct frame_info *fi = __builtin_frame_address(0), *next = NULL;
+       fi;
+       fi = next) {
+    next = fi->prev;
 
     /* Detect the simplest kind of infinite loop */
-#if defined(__riscv)
-    /* On RISC-V, frame is CFA-16 (record) but next is a CFA value,
-       so a self-loop means next == frame + 1 (in struct units). */
-    if (next == frame + 1) {
-#else
-    if (frame == next) {
-#endif
+    if (fi == next) {
       fprintf(stderr, "fp_backtrace: loop detected\n");
       break;
     }
 
-    symbol = backtrace_symbol(frame);
+    symbol = backtrace_symbol(fi);
     if (!symbol)
       continue;
 

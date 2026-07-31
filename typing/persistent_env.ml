@@ -28,13 +28,8 @@ type error =
   | Inconsistent_import of modname * filepath * filepath
   | Need_recursive_types of modname
 
-include (struct
-  exception Error of error
-  let error e = Typing_recovery.log_and_raise (Error e)
-end : sig
-  type exn += private Error of error
-  val error : error -> 'a
-end)
+exception Error of error
+let error err = raise (Error err)
 
 module Persistent_signature = struct
   type t =

@@ -84,7 +84,6 @@ META
 
 /bytecomp/opcodes.ml
 /bytecomp/opcodes.mli
-/bytecomp/opnames.ml
 /bytecomp/byterntm.ml
 
 /debugger/debugger_lexer.ml
@@ -236,14 +235,15 @@ META
 /parsing/camlinternalMenhirLib.ml
 /parsing/camlinternalMenhirLib.mli
 
-/runtime/api-testing
 /runtime/domain_state.inc
+/runtime/caml/jumptbl.h
 /runtime/caml/m.h
 /runtime/caml/s.h
 /runtime/primitives
 /runtime/primitives*.new
 /runtime/prims.c
 /runtime/caml/exec.h
+/runtime/caml/opnames.h
 /runtime/caml/version.h
 /runtime/ocamlrun
 /runtime/ocamlrund
@@ -283,6 +283,7 @@ META
 /tools/ocamldep.opt
 /tools/ocamlprof
 /tools/ocamlprof.opt
+/tools/opnames.ml
 /tools/dumpobj
 /tools/dumpobj.opt
 /tools/ocamlobjinfo
@@ -306,6 +307,8 @@ META
 /tools/cmpbyt.opt
 /tools/stripdebug
 /tools/stripdebug.opt
+/tools/make_opcodes
+/tools/make_opcodes.ml
 /tools/ocamltex
 /tools/eventlog_metadata
 /tools/lintapidiff.opt

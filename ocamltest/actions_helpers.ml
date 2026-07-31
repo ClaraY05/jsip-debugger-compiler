@@ -19,13 +19,13 @@ open Ocamltest_stdlib
 
 let skip_with_reason reason =
   let code _log env =
-    let result = Test_result.skip_with_reason reason in
+    let result = Result.skip_with_reason reason in
     (result, env)
   in
   Actions.make ~name:"skip" ~description:"Skip the test" code
 
 let pass_or_skip test pass_reason skip_reason _log env =
-  let open Test_result in
+  let open Result in
   let result =
     if test
     then pass_with_reason pass_reason
@@ -77,12 +77,12 @@ let setup_symlinks test_source_directory build_directory files =
         else
           Sys.remove dst
     in
-      Ocamltest_unix.symlink src dst in
+      Unix.symlink src dst in
   let copy filename =
     let src = Filename.concat test_source_directory filename in
     let dst = Filename.concat build_directory filename in
     Sys.copy_file src dst in
-  let f = if Ocamltest_unix.has_symlink () then symlink else copy in
+  let f = if Unix.has_symlink () then symlink else copy in
   Sys.make_directory build_directory;
   List.iter f files
 
@@ -94,7 +94,7 @@ let setup_subdirectories source_directory build_directory subdirs =
   in
   List.iter cp_dir subdirs
 
-let setup_build_env ~add_testfile additional_files (_log : out_channel) env =
+let setup_build_env add_testfile additional_files (_log : out_channel) env =
   let source_dir = (test_source_directory env) in
   let build_dir = (test_build_directory env) in
   let some_files = additional_files @ (readonly_files env) in
@@ -106,13 +106,13 @@ let setup_build_env ~add_testfile additional_files (_log : out_channel) env =
   let subdirs = subdirectories env in
   setup_subdirectories source_dir build_dir subdirs;
   Sys.chdir build_dir;
-  (Test_result.pass, env)
+  (Result.pass, env)
 
-let setup_simple_build_env ~add_testfile additional_files log env =
+let setup_simple_build_env add_testfile additional_files log env =
   let build_env = Environments.add
     Builtin_variables.test_build_directory
     (test_build_directory_prefix env) env in
-  setup_build_env ~add_testfile additional_files log build_env
+  setup_build_env add_testfile additional_files log build_env
 
 let run_cmd
     ?(environment=[||])
@@ -196,11 +196,11 @@ let run_cmd
   n
 
 let run
-    ~(log_message : string)
-    ~(redirect_output : bool)
-    ~(can_skip : bool)
-    ~prog:(prog_variable : Variables.t)
-    ~args:(args_variable : Variables.t option)
+    (log_message : string)
+    (redirect_output : bool)
+    (can_skip : bool)
+    (prog_variable : Variables.t)
+    (args_variable : Variables.t option)
     (log : out_channel)
     (env : Environments.t)
   =
@@ -208,7 +208,7 @@ let run
   | None ->
     let msg = Printf.sprintf "%s: variable %s is undefined"
       log_message (Variables.name_of_variable prog_variable) in
-    (Test_result.fail_with_reason msg, env)
+    (Result.fail_with_reason msg, env)
   | Some program ->
     let arguments = match args_variable with
       | None -> ""
@@ -233,21 +233,21 @@ let run
     in
     let exit_status = run_cmd log env commandline in
     if exit_status=expected_exit_status
-    then (Test_result.pass, env)
+    then (Result.pass, env)
     else begin
       let reason = mkreason what (String.concat " " commandline) exit_status in
       if exit_status = 125 && can_skip
-      then (Test_result.skip_with_reason reason, env)
-      else (Test_result.fail_with_reason reason, env)
+      then (Result.skip_with_reason reason, env)
+      else (Result.fail_with_reason reason, env)
     end
 
 let run_program =
   run
-    ~log_message:"Running program"
-    ~redirect_output:true
-    ~can_skip:false
-    ~prog:Builtin_variables.program
-    ~args:(Some Builtin_variables.arguments)
+    "Running program"
+    true
+    false
+    Builtin_variables.program
+    (Some Builtin_variables.arguments)
 
 let run_script log env =
   let response_file = Filename.temp_file "ocamltest-" ".response" in
@@ -256,34 +256,34 @@ let run_script log env =
   let scriptenv = Environments.add
     Builtin_variables.ocamltest_response response_file env in
   let (result, newenv) = run
-    ~log_message:"Running script"
-    ~redirect_output:true
-    ~can_skip:true
-    ~prog:Builtin_variables.script
-    ~args:None
+    "Running script"
+    true
+    true
+    Builtin_variables.script
+    None
     log scriptenv in
   let final_value =
-    if Test_result.is_pass result then begin
+    if Result.is_pass result then begin
       match Modifier_parser.modifiers_of_file response_file with
       | modifiers ->
         let modified_env = Environments.apply_modifiers newenv modifiers in
         (result, modified_env)
       | exception Failure reason ->
-        (Test_result.fail_with_reason reason, newenv)
+        (Result.fail_with_reason reason, newenv)
       | exception Variables.No_such_variable name ->
         let reason =
           Printf.sprintf "error in script response: unknown variable %s" name
         in
-        (Test_result.fail_with_reason reason, newenv)
+        (Result.fail_with_reason reason, newenv)
       | exception Variables.Recursive_variable_definition name ->
         let reason =
           Printf.sprintf "error in script response: \
             recursive variable definition %s" name
         in
-        (Test_result.fail_with_reason reason, newenv)
+        (Result.fail_with_reason reason, newenv)
     end else begin
       let reason = String.trim (Sys.string_of_file response_file) in
-      let newresult = { result with Test_result.reason = Some reason } in
+      let newresult = { result with Result.reason = Some reason } in
       (newresult, newenv)
     end
   in
@@ -319,27 +319,27 @@ let run_hook hook_name log input_env =
       begin match Modifier_parser.modifiers_of_file response_file with
       | modifiers ->
         let modified_env = Environments.apply_modifiers hookenv modifiers in
-        (Test_result.pass, modified_env)
+        (Result.pass, modified_env)
       | exception Failure reason ->
-        (Test_result.fail_with_reason reason, hookenv)
+        (Result.fail_with_reason reason, hookenv)
       | exception Variables.No_such_variable name ->
         let reason =
           Printf.sprintf "error in script response: unknown variable %s" name
         in
-        (Test_result.fail_with_reason reason, hookenv)
+        (Result.fail_with_reason reason, hookenv)
       | exception Variables.Recursive_variable_definition name ->
         let reason =
           Printf.sprintf "error in script response: \
             recursive variable definition %s" name
         in
-        (Test_result.fail_with_reason reason, hookenv)
+        (Result.fail_with_reason reason, hookenv)
       end
     | _ ->
       Printf.fprintf log "Hook returned %d" exit_status;
       let reason = String.trim (Sys.string_of_file response_file) in
       if exit_status=125
-      then (Test_result.skip_with_reason reason, hookenv)
-      else (Test_result.fail_with_reason reason, hookenv)
+      then (Result.skip_with_reason reason, hookenv)
+      else (Result.fail_with_reason reason, hookenv)
   in
   Sys.force_remove response_file;
   final_value
@@ -368,7 +368,7 @@ let check_output kind_of_output output_variable reference_variable log
   let tool =
     Filecompare.make_cmp_tool ~ignore:ignore_header_conf in
   match Filecompare.check_file ~tool files with
-    | Filecompare.Same -> (Test_result.pass, env)
+    | Filecompare.Same -> (Result.pass, env)
     | Filecompare.Different ->
       let diff = Filecompare.diff files in
       let diffstr = match diff with
@@ -383,7 +383,7 @@ let check_output kind_of_output output_variable reference_variable log
           kind_of_output output_filename reference_filename;
         Filecompare.promote files ignore_header_conf;
       end;
-      (Test_result.fail_with_reason reason, env)
+      (Result.fail_with_reason reason, env)
     | Filecompare.Unexpected_output ->
       let banner = String.make 40 '=' in
       let unexpected_output = Sys.string_of_file output_filename in
@@ -393,8 +393,8 @@ let check_output kind_of_output output_variable reference_variable log
         "The file %s was expected to be empty because there is no \
           reference file %s but it is not:\n%s\n"
         output_filename reference_filename unexpected_output_with_banners in
-      (Test_result.fail_with_reason reason, env)
+      (Result.fail_with_reason reason, env)
     | Filecompare.Error (commandline, exitcode) ->
       let reason = Printf.sprintf "The command %s failed with status %d"
         commandline exitcode in
-      (Test_result.fail_with_reason reason, env)
+      (Result.fail_with_reason reason, env)

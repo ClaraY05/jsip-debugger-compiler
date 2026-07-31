@@ -1,10 +1,10 @@
 (* TEST
  modules = "opt.ml barrier.ml hist.ml shared.ml run.ml outcome.ml";
  multicore;
- not tsan; (* tsan detects data races and fails *)
- not bsd;
+ no-tsan; (* tsan detects data races and fails *)
+ not-bsd;
  {
-   not windows;
+   not-windows;
    bytecode;
  }{
    native;

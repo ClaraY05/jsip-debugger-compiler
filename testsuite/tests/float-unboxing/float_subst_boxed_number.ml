@@ -1,8 +1,8 @@
 (* TEST
  include config;
- binary_modules = "config";
  flags = "-w -55";
- ocamlopt_flags = "-inline 20";
+ ocamlc_flags = "config.cmo";
+ ocamlopt_flags = "-inline 20 config.cmx";
  native;
 *)
 

@@ -32,13 +32,7 @@ val cppflags : Variables.t
 
 val cc : Variables.t
 
-val outputobj : Variables.t
-
 val cflags : Variables.t
-
-val cxx : Variables.t
-
-val ccomp_type : Variables.t
 
 val caml_ld_library_path : Variables.t
 
@@ -98,7 +92,6 @@ val ocamlrun : Variables.t
 val ocamlc_flags : Variables.t
 val ocamlc_default_flags : Variables.t
 
-val ocamllex_exit_status : Variables.t
 val ocamllex_flags : Variables.t
 
 val ocamlopt_flags : Variables.t
@@ -142,7 +135,5 @@ val plugins : Variables.t
 val shared_library_cflags : Variables.t
 
 val sharedobjext : Variables.t
-
-val system : Variables.t
 
 val use_runtime : Variables.t

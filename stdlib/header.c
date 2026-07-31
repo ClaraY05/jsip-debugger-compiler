@@ -22,8 +22,6 @@
   #define NORETURN _Noreturn
 #endif
 
-#include "misc_internals.h"
-
 #include <errno.h>
 
 #ifdef _WIN32
@@ -85,7 +83,7 @@ static int exec_file(wchar_t *file, wchar_t *cmdline)
   PROCESS_INFORMATION procinfo;
   DWORD retcode;
 
-  if (SearchPath(NULL, file, L".exe", countof(truename),
+  if (SearchPath(NULL, file, L".exe", sizeof(truename)/sizeof(wchar_t),
                  truename, NULL)) {
     /* Need to ignore ctrl-C and ctrl-break, otherwise we'll die and take the
        underlying OCaml program with us! */
@@ -416,7 +414,7 @@ NORETURN void __cdecl wmainCRTStartup(void)
   wchar_t wruntime_path[MAX_PATH], *dirname;
   HANDLE h;
 
-  if (GetModuleFileName(NULL, module, countof(module)) == 0)
+  if (GetModuleFileName(NULL, module, sizeof(module)/sizeof(wchar_t)) == 0)
     exit_with_error(L"Out of memory", NULL, NULL);
 
   h = CreateFile(module, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -430,9 +428,10 @@ NORETURN void __cdecl wmainCRTStartup(void)
       || (runtime_path = read_runtime_path(h, &rntm_strlen)) == NULL
       || (rntm_bsz =
             MultiByteToWideChar(CP, 0, runtime_path, rntm_strlen + 1,
-                                wruntime_path, countof(wruntime_path))) == 0
-      || (GetFullPathName(module, countof(truename), truename, &dirname)
-          >= countof(truename)))
+                                wruntime_path,
+                                sizeof(wruntime_path)/sizeof(wchar_t))) == 0
+      || GetFullPathName(module, sizeof(truename)/sizeof(wchar_t), truename,
+                         &dirname) >= sizeof(truename)/sizeof(wchar_t))
     exit_with_error(NULL, truename,
                     L" not found or is not a bytecode executable file");
   CloseHandle(h);

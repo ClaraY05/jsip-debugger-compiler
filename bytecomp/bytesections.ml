@@ -24,7 +24,6 @@ module Name = struct
     | CRCS (** crcs for modules *)
     | DATA (** global data (constant) *)
     | DBUG (** debug info *)
-    | HINT (** hint info *)
     | DLLS (** dll names *)
     | DLPT (** dll paths *)
     | OSLD (** OCaml Standard Library Default location *)
@@ -43,7 +42,6 @@ module Name = struct
     | "PRIM" -> PRIM
     | "SYMB" -> SYMB
     | "DBUG" -> DBUG
-    | "HINT" -> HINT
     | "CRCS" -> CRCS
     | "RNTM" -> RNTM
     | name   ->
@@ -60,7 +58,6 @@ module Name = struct
     | PRIM -> "PRIM"
     | SYMB -> "SYMB"
     | DBUG -> "DBUG"
-    | HINT -> "HINT"
     | CRCS -> "CRCS"
     | RNTM -> "RNTM"
     | Other n -> n

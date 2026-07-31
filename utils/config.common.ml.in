@@ -24,7 +24,7 @@ let version = Sys.ocaml_version
    from values in ../build-aux/ocaml_version.m4 - do not edit these lines
    directly. *)
 let is_official_release = false
-let release_number = 22
+let release_number = 21
 
 external standard_library_default : unit -> string = "%standard_library_default"
 
@@ -182,7 +182,6 @@ let configuration_variables () =
   p_bool "native_dynlink" native_dynlink;
   p_bool "naked_pointers" naked_pointers;
   p_bool "with_codegen_invariants" with_codegen_invariants;
-  p_int "reserved_header_bits" reserved_header_bits;
 
   p "exec_magic_number" exec_magic_number;
   p "cmi_magic_number" cmi_magic_number;

@@ -96,12 +96,7 @@ type error =
   | Polymorphic_optional_param of string
   | Functor_optional_param of string
 
-module Error : sig
-    type exn += private In_context of Location.t * Env.t * error
-
-  val log_or_raise : Location.t -> Env.t -> error -> unit
-  val log_and_raise : Location.t -> Env.t -> error -> 'a
-end
+exception Error of Location.t * Env.t * error
 
 (* Support for first-class modules. *)
 val transl_modtype_longident:  (* from Typemod *)

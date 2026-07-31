@@ -60,7 +60,7 @@ let test_of_action action =
 let run_actions log testenv actions =
   let total = List.length actions in
   let rec run_actions_aux action_number env = function
-    | [] -> (Test_result.pass, env)
+    | [] -> (Result.pass, env)
     | action::remaining_actions ->
       begin
         Printf.fprintf log "\nRunning action %d/%d (%s)\n%!"
@@ -68,8 +68,8 @@ let run_actions log testenv actions =
         let (result, env') = Actions.run log env action in
         Printf.fprintf log "Action %d/%d (%s) %s\n%!"
           action_number total (Actions.name action)
-          (Test_result.string_of_result result);
-        if Test_result.is_pass result
+          (Result.string_of_result result);
+        if Result.is_pass result
         then run_actions_aux (action_number+1) env' remaining_actions
         else (result, env')
       end in

@@ -34,6 +34,3 @@ let runtime =
 
 let tools =
   Filename.make_path [srcdir; "tools"]
-
-let ocamltest =
-  Filename.make_path [srcdir; "ocamltest"]

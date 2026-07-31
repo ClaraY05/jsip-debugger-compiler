@@ -475,7 +475,6 @@ module BR = Branch_relaxation.Make (struct
     | Lop(Iopaque) -> 0
     | Lop(Ispecific _) -> 1
     | Lop(Idls_get) -> 1
-    | Lop(Iatomic_fetch_add) -> 7
     | Lop(Ireturn_addr) -> 1
     | Lreloadretaddr -> 2
     | Lreturn -> 2
@@ -598,17 +597,18 @@ let emit_instr env i =
     match i.desc with
     | Lend -> ()
     | Lprologue ->
-        let n = frame_size env in
-        if env.f.fun_frame_required then begin
-            `	mflr	0\n`;
-            `	std	0, {emit_int 16}(1)\n`;
-            `	std	2, {emit_int 8}(1)\n`;
-            cfi_offset ~reg: 65 (* LR *) ~offset: 16;
-         end;
-        if n > 0 then begin
-            `	addi	1, 1, {emit_int(-n)}\n`;
-            cfi_adjust_cfa_offset n
-        end
+      let n = frame_size env in
+      if n > 0 then begin
+        `	addi	1, 1, {emit_int(-n)}\n`;
+        cfi_adjust_cfa_offset n
+      end;
+      if env.f.fun_frame_required then begin
+        let ra = retaddr_offset env in
+        `	mflr	0\n`;
+        `	std	0, {emit_int ra}(1)\n`;
+        cfi_offset ~reg: 65 (* LR *) ~offset: (ra - n);
+        `	std	2, {emit_int(toc_save_offset env)}(1)\n`
+      end
     | Lop(Imove | Ispill | Ireload) ->
         let src = i.arg.(0) and dst = i.res.(0) in
         if src.loc <> dst.loc then begin
@@ -847,17 +847,6 @@ let emit_instr env i =
     | Lop (Idls_get) ->
         let offset = Domainstate.(idx_of_field Domain_dls_root) * 8 in
         `	ld	{emit_reg i.res.(0)}, {emit_int offset}(30)\n`
-    | Lop (Iatomic_fetch_add) ->
-        (* trailing lwsync is the release fence, #10995 *)
-        let lbl = new_label() in
-        `	sync\n`;
-        `{emit_label lbl}:\n`;
-        `	ldarx	{emit_reg i.res.(0)}, 0, {emit_reg i.arg.(0)}\n`;
-        `	add	0, {emit_reg i.res.(0)}, {emit_reg i.arg.(1)}\n`;
-        `	stdcx.	0, 0, {emit_reg i.arg.(0)}\n`;
-        `	bne-	{emit_label lbl}\n`;
-        `	isync\n`;
-        `	lwsync\n`
     | Lop (Ireturn_addr) ->
         if env.f.fun_frame_required then
         `	ld	{emit_reg i.res.(0)}, {emit_int(retaddr_offset env)}(1)\n`
@@ -1032,11 +1021,11 @@ let fundecl fundecl =
   `	.globl	{emit_symbol fundecl.fun_name}\n`;
   emit_type_directive fundecl.fun_name "@function";
   `{emit_symbol fundecl.fun_name}:\n`;
-  cfi_startproc();
   `0:	addis	2, 12, (.TOC. - 0b)@ha\n`;
   `	addi	2, 2, (.TOC. - 0b)@l\n`;
   `	.localentry {emit_symbol fundecl.fun_name}, . - 0b\n`;
   emit_debug_info fundecl.fun_dbg;
+  cfi_startproc();
   (* Dynamic stack checking *)
   begin match !handle_overflow with
   | None -> ()

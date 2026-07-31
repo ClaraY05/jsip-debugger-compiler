@@ -672,23 +672,12 @@ type error =
   | Illegal_value_name of Location.t * string
   | Lookup_error of Location.t * t * lookup_error
 
-module Error : sig
-  type exn += private In_context of error
+exception Error of error
 
-  val log_or_raise : error -> unit
-  val log_and_raise : error -> 'a
-end = struct
-  type exn += In_context of error
-
-  let log_and_raise err =
-    Typing_recovery.log_and_raise (In_context err)
-
-  let log_or_raise err =
-    Typing_recovery.log_or_raise (In_context err)
-end
+let error err = raise (Error err)
 
 let lookup_error loc env err =
-  Error.log_and_raise (Lookup_error(loc, env, err))
+  error (Lookup_error(loc, env, err))
 
 let same_type_declarations e1 e2 =
   e1.types == e2.types &&
@@ -917,24 +906,11 @@ let components_of_module ~alerts ~uid env ps path addr mty shape =
     }
   }
 
-(* Maintain the same physical name for .cmi names even across type-checker
-   resets. In particular, this means that lazy thunks (e.g. in Matching) do not
-   need to be reset as persistent names in identifiers in those lambda blocks
-   will be physically identical across type-checker resets.
-   See also tests in testsuite/tests/tool-ocamlc-determinism *)
-let hashcons_name =
-  let names = String.Tbl.create 1023 in
-  fun name ->
-    try String.Tbl.find names name
-    with Not_found ->
-      String.Tbl.add names name name;
-      name
-
 let sign_of_cmi ~freshen { Persistent_env.Persistent_signature.cmi; _ } =
   let name = cmi.cmi_name in
   let sign = cmi.cmi_sign in
   let flags = cmi.cmi_flags in
-  let id = Ident.create_persistent (hashcons_name name) in
+  let id = Ident.create_persistent name in
   let path = Pident id in
   let alerts =
     List.fold_left (fun acc -> function Alerts s -> s | _ -> acc)
@@ -1409,11 +1385,10 @@ and expand_module_path ~lax env path =
 let normalize_module_path oloc env path =
   try normalize_module_path ~lax:(oloc = None) env path
   with Not_found ->
-  match oloc with
-  | None -> assert false
-  | Some loc ->
-      Error.log_and_raise
-        (Missing_module(loc, path, normalize_module_path ~lax:true env path))
+    match oloc with None -> assert false
+    | Some loc ->
+        error (Missing_module(loc, path,
+                              normalize_module_path ~lax:true env path))
 
 let rec normalize_path_prefix oloc env path =
   match path with
@@ -1798,266 +1773,7 @@ let module_declaration_address env id presence md =
   | Mp_present ->
       Lazy_backtrack.create_forced (Aident id)
 
-(* Insertion of bindings by identifier + path *)
-
-let check_usage loc id uid warn tbl =
-  if not loc.Location.loc_ghost &&
-     Uid.for_actual_declaration uid &&
-     Warnings.is_active (warn "")
-  then begin
-    let name = Ident.name id in
-    if Types.Uid.Tbl.mem tbl uid then ()
-    else let used = ref false in
-    Types.Uid.Tbl.add tbl uid (fun () -> used := true);
-    if not (name = "" || name.[0] = '_' || name.[0] = '#')
-    then
-      !add_delayed_check_forward
-        (fun () -> if not !used then Location.prerr_warning loc (warn name))
-  end
-
-let check_value_name name loc =
-  (* Note: we could also check here general validity of the
-     identifier, to protect against bad identifiers forged by -pp or
-     -ppx preprocessors. *)
-  if String.length name > 0 && not
-       (Utf8_lexeme.starts_like_a_valid_identifier name) then
-    for i = 1 to String.length name - 1 do
-      if name.[i] = '#' then
-        Error.log_or_raise (Illegal_value_name(loc, name))
-    done
-
-let store_value ?check id addr decl shape env =
-  check_value_name (Ident.name id) decl.val_loc;
-  Builtin_attributes.mark_alerts_used decl.val_attributes;
-  Option.iter
-    (fun f -> check_usage decl.val_loc id decl.val_uid f !value_declarations)
-    check;
-  let vda =
-    { vda_description = decl;
-      vda_address = addr;
-      vda_shape = shape }
-  in
-  { env with
-    values = IdTbl.add id (Val_bound vda) env.values;
-    summary = Env_value(env.summary, id, decl) }
-
-let store_constructor ~check type_decl type_id cstr_id cstr env =
-  Builtin_attributes.warning_scope cstr.cstr_attributes (fun () ->
-  if check && not type_decl.type_loc.Location.loc_ghost
-     && Warnings.is_active (Warnings.Unused_constructor ("", Unused))
-  then begin
-    let ty_name = Ident.name type_id in
-    let name = cstr.cstr_name in
-    let loc = cstr.cstr_loc in
-    let k = cstr.cstr_uid in
-    let priv = type_decl.type_private in
-    if not (Types.Uid.Tbl.mem !used_constructors k) then begin
-      let used = constructor_usages () in
-      Types.Uid.Tbl.add !used_constructors k
-        (add_constructor_usage used);
-      if not (ty_name = "" || ty_name.[0] = '_')
-      then
-        !add_delayed_check_forward
-          (fun () ->
-            Option.iter
-              (fun complaint ->
-                 if not (is_in_signature env) then
-                   Location.prerr_warning loc
-                     (Warnings.Unused_constructor(name, complaint)))
-              (constructor_usage_complaint ~rebind:false priv used));
-    end;
-  end);
-  Builtin_attributes.mark_alerts_used cstr.cstr_attributes;
-  Builtin_attributes.mark_warn_on_literal_pattern_used cstr.cstr_attributes;
-  let cda_shape = Shape.leaf cstr.cstr_uid in
-  { env with
-    constrs =
-      TycompTbl.add cstr_id
-        { cda_description = cstr; cda_address = None; cda_shape } env.constrs;
-  }
-
-let store_label ~check type_decl type_id lbl_id lbl env =
-  Builtin_attributes.warning_scope lbl.lbl_attributes (fun () ->
-  if check && not type_decl.type_loc.Location.loc_ghost
-     && Warnings.is_active (Warnings.Unused_field ("", Unused))
-  then begin
-    let ty_name = Ident.name type_id in
-    let priv = type_decl.type_private in
-    let name = lbl.lbl_name in
-    let loc = lbl.lbl_loc in
-    let mut = lbl.lbl_mut in
-    let k = lbl.lbl_uid in
-    if not (Types.Uid.Tbl.mem !used_labels k) then
-      let used = label_usages () in
-      Types.Uid.Tbl.add !used_labels k
-        (add_label_usage used);
-      if not (ty_name = "" || ty_name.[0] = '_' || name.[0] = '_')
-      then !add_delayed_check_forward
-          (fun () ->
-            Option.iter
-              (fun complaint ->
-                 if not (is_in_signature env) then
-                   Location.prerr_warning
-                     loc (Warnings.Unused_field(name, complaint)))
-              (label_usage_complaint priv mut used))
-  end);
-  Builtin_attributes.mark_alerts_used lbl.lbl_attributes;
-  if lbl.lbl_mut = Mutable then
-    Builtin_attributes.mark_deprecated_mutable_used lbl.lbl_attributes;
-  { env with
-    labels = TycompTbl.add lbl_id lbl env.labels;
-  }
-
-let store_type ~check id info shape env =
-  let loc = info.type_loc in
-  if check then
-    check_usage loc id info.type_uid
-      (fun s -> Warnings.Unused_type_declaration (s, Warnings.Declaration))
-      !type_declarations;
-  let descrs, env =
-    let path = Pident id in
-    match info.type_kind with
-    | Type_variant (_,repr) ->
-        let constructors = Datarepr.constructors_of_type path info
-                            ~current_unit:(get_current_unit ())
-        in
-        Type_variant (List.map snd constructors, repr),
-        List.fold_left
-          (fun env (cstr_id, cstr) ->
-            store_constructor ~check info id cstr_id cstr env)
-          env constructors
-    | Type_record (_, repr) ->
-        let labels = Datarepr.labels_of_type path info in
-        Type_record (List.map snd labels, repr),
-        List.fold_left
-          (fun env (lbl_id, lbl) ->
-            store_label ~check info id lbl_id lbl env)
-          env labels
-    | Type_abstract r -> Type_abstract r, env
-    | Type_open -> Type_open, env
-    | Type_external name -> Type_external name, env
-  in
-  let tda =
-    { tda_declaration = info;
-      tda_descriptions = descrs;
-      tda_shape = shape }
-  in
-  Builtin_attributes.mark_alerts_used info.type_attributes;
-  { env with
-    types = IdTbl.add id tda env.types;
-    summary = Env_type(env.summary, id, info) }
-
-let store_type_infos ~tda_shape id info env =
-  (* Simplified version of store_type that doesn't compute and store
-     constructor and label infos, but simply record the arity and
-     manifest-ness of the type.  Used in components_of_module to
-     keep track of type abbreviations (e.g. type t = float) in the
-     computation of label representations. *)
-  let tda =
-    {
-      tda_declaration = info;
-      tda_descriptions = Type_abstract (Btype.type_origin info);
-      tda_shape
-    }
-  in
-  { env with
-    types = IdTbl.add id tda env.types;
-    summary = Env_type(env.summary, id, info) }
-
-let store_extension ~check ~rebind id addr ext shape env =
-  let loc = ext.ext_loc in
-  let cstr =
-    Datarepr.extension_descr
-      ~current_unit:(get_current_unit ()) (Pident id) ext
-  in
-  let cda =
-    { cda_description = cstr;
-      cda_address = Some addr;
-      cda_shape = shape }
-  in
-  Builtin_attributes.mark_alerts_used ext.ext_attributes;
-  Builtin_attributes.mark_warn_on_literal_pattern_used ext.ext_attributes;
-  Builtin_attributes.warning_scope ext.ext_attributes (fun () ->
-  if check && not loc.Location.loc_ghost &&
-    Warnings.is_active (Warnings.Unused_extension ("", false, Unused))
-  then begin
-    let priv = ext.ext_private in
-    let is_exception = Path.same ext.ext_type_path Predef.path_exn in
-    let name = cstr.cstr_name in
-    let k = cstr.cstr_uid in
-    if not (Types.Uid.Tbl.mem !used_constructors k) then begin
-      let used = constructor_usages () in
-      Types.Uid.Tbl.add !used_constructors k
-        (add_constructor_usage used);
-      !add_delayed_check_forward
-         (fun () ->
-           Option.iter
-             (fun complaint ->
-                if not (is_in_signature env) then
-                  Location.prerr_warning loc
-                    (Warnings.Unused_extension
-                       (name, is_exception, complaint)))
-             (constructor_usage_complaint ~rebind priv used))
-    end;
-  end);
-  { env with
-    constrs = TycompTbl.add id cda env.constrs;
-    summary = Env_extension(env.summary, id, ext) }
-
-let store_module ?(update_summary=true) ~check
-                 id addr presence md shape env =
-  let open Subst.Lazy in
-  let loc = md.mdl_loc in
-  Option.iter
-    (fun f -> check_usage loc id md.mdl_uid f !module_declarations) check;
-  Builtin_attributes.mark_alerts_used md.mdl_attributes;
-  let alerts = Builtin_attributes.alerts_of_attrs md.mdl_attributes in
-  let comps =
-    components_of_module ~alerts ~uid:md.mdl_uid
-      env Subst.identity (Pident id) addr md.mdl_type shape
-  in
-  let mda =
-    { mda_declaration = md;
-      mda_components = comps;
-      mda_address = addr;
-      mda_shape = shape }
-  in
-  let summary =
-    if not update_summary then env.summary
-    else Env_module (env.summary, id, presence, force_module_decl md) in
-  { env with
-    modules = IdTbl.add id (Mod_local mda) env.modules;
-    summary }
-
-let store_modtype ?(update_summary=true) id info shape env =
-  Builtin_attributes.mark_alerts_used info.Subst.Lazy.mtdl_attributes;
-  let mtda = { mtda_declaration = info; mtda_shape = shape } in
-  let summary =
-    if not update_summary then env.summary
-    else Env_modtype (env.summary, id, Subst.Lazy.force_modtype_decl info) in
-  { env with
-    modtypes = IdTbl.add id mtda env.modtypes;
-    summary }
-
-let store_class id addr desc shape env =
-  Builtin_attributes.mark_alerts_used desc.cty_attributes;
-  let clda =
-    { clda_declaration = desc;
-      clda_address = addr;
-      clda_shape = shape; }
-  in
-  { env with
-    classes = IdTbl.add id clda env.classes;
-    summary = Env_class(env.summary, id, desc) }
-
-let store_cltype id desc shape env =
-  Builtin_attributes.mark_alerts_used desc.clty_attributes;
-  let cltda = { cltda_declaration = desc; cltda_shape = shape } in
-  { env with
-    cltypes = IdTbl.add id cltda env.cltypes;
-    summary = Env_cltype(env.summary, id, desc) }
-
-let components_of_module_maker
+let rec components_of_module_maker
           {cm_env; cm_prefixing_subst;
            cm_path; cm_addr; cm_mty; cm_shape} : _ result =
   match scrape_alias cm_env cm_mty with
@@ -2241,6 +1957,265 @@ let components_of_module_maker
           fcomp_subst_cache = Hashtbl.create 17 })
   | MtyL_ident _ -> Error No_components_abstract
   | MtyL_alias p -> Error (No_components_alias p)
+
+(* Insertion of bindings by identifier + path *)
+
+and check_usage loc id uid warn tbl =
+  if not loc.Location.loc_ghost &&
+     Uid.for_actual_declaration uid &&
+     Warnings.is_active (warn "")
+  then begin
+    let name = Ident.name id in
+    if Types.Uid.Tbl.mem tbl uid then ()
+    else let used = ref false in
+    Types.Uid.Tbl.add tbl uid (fun () -> used := true);
+    if not (name = "" || name.[0] = '_' || name.[0] = '#')
+    then
+      !add_delayed_check_forward
+        (fun () -> if not !used then Location.prerr_warning loc (warn name))
+  end;
+
+and check_value_name name loc =
+  (* Note: we could also check here general validity of the
+     identifier, to protect against bad identifiers forged by -pp or
+     -ppx preprocessors. *)
+  if String.length name > 0 && not
+       (Utf8_lexeme.starts_like_a_valid_identifier name) then
+    for i = 1 to String.length name - 1 do
+      if name.[i] = '#' then
+        error (Illegal_value_name(loc, name))
+    done
+
+and store_value ?check id addr decl shape env =
+  check_value_name (Ident.name id) decl.val_loc;
+  Builtin_attributes.mark_alerts_used decl.val_attributes;
+  Option.iter
+    (fun f -> check_usage decl.val_loc id decl.val_uid f !value_declarations)
+    check;
+  let vda =
+    { vda_description = decl;
+      vda_address = addr;
+      vda_shape = shape }
+  in
+  { env with
+    values = IdTbl.add id (Val_bound vda) env.values;
+    summary = Env_value(env.summary, id, decl) }
+
+and store_constructor ~check type_decl type_id cstr_id cstr env =
+  Builtin_attributes.warning_scope cstr.cstr_attributes (fun () ->
+  if check && not type_decl.type_loc.Location.loc_ghost
+     && Warnings.is_active (Warnings.Unused_constructor ("", Unused))
+  then begin
+    let ty_name = Ident.name type_id in
+    let name = cstr.cstr_name in
+    let loc = cstr.cstr_loc in
+    let k = cstr.cstr_uid in
+    let priv = type_decl.type_private in
+    if not (Types.Uid.Tbl.mem !used_constructors k) then begin
+      let used = constructor_usages () in
+      Types.Uid.Tbl.add !used_constructors k
+        (add_constructor_usage used);
+      if not (ty_name = "" || ty_name.[0] = '_')
+      then
+        !add_delayed_check_forward
+          (fun () ->
+            Option.iter
+              (fun complaint ->
+                 if not (is_in_signature env) then
+                   Location.prerr_warning loc
+                     (Warnings.Unused_constructor(name, complaint)))
+              (constructor_usage_complaint ~rebind:false priv used));
+    end;
+  end);
+  Builtin_attributes.mark_alerts_used cstr.cstr_attributes;
+  Builtin_attributes.mark_warn_on_literal_pattern_used cstr.cstr_attributes;
+  let cda_shape = Shape.leaf cstr.cstr_uid in
+  { env with
+    constrs =
+      TycompTbl.add cstr_id
+        { cda_description = cstr; cda_address = None; cda_shape } env.constrs;
+  }
+
+and store_label ~check type_decl type_id lbl_id lbl env =
+  Builtin_attributes.warning_scope lbl.lbl_attributes (fun () ->
+  if check && not type_decl.type_loc.Location.loc_ghost
+     && Warnings.is_active (Warnings.Unused_field ("", Unused))
+  then begin
+    let ty_name = Ident.name type_id in
+    let priv = type_decl.type_private in
+    let name = lbl.lbl_name in
+    let loc = lbl.lbl_loc in
+    let mut = lbl.lbl_mut in
+    let k = lbl.lbl_uid in
+    if not (Types.Uid.Tbl.mem !used_labels k) then
+      let used = label_usages () in
+      Types.Uid.Tbl.add !used_labels k
+        (add_label_usage used);
+      if not (ty_name = "" || ty_name.[0] = '_' || name.[0] = '_')
+      then !add_delayed_check_forward
+          (fun () ->
+            Option.iter
+              (fun complaint ->
+                 if not (is_in_signature env) then
+                   Location.prerr_warning
+                     loc (Warnings.Unused_field(name, complaint)))
+              (label_usage_complaint priv mut used))
+  end);
+  Builtin_attributes.mark_alerts_used lbl.lbl_attributes;
+  if lbl.lbl_mut = Mutable then
+    Builtin_attributes.mark_deprecated_mutable_used lbl.lbl_attributes;
+  { env with
+    labels = TycompTbl.add lbl_id lbl env.labels;
+  }
+
+and store_type ~check id info shape env =
+  let loc = info.type_loc in
+  if check then
+    check_usage loc id info.type_uid
+      (fun s -> Warnings.Unused_type_declaration (s, Warnings.Declaration))
+      !type_declarations;
+  let descrs, env =
+    let path = Pident id in
+    match info.type_kind with
+    | Type_variant (_,repr) ->
+        let constructors = Datarepr.constructors_of_type path info
+                            ~current_unit:(get_current_unit ())
+        in
+        Type_variant (List.map snd constructors, repr),
+        List.fold_left
+          (fun env (cstr_id, cstr) ->
+            store_constructor ~check info id cstr_id cstr env)
+          env constructors
+    | Type_record (_, repr) ->
+        let labels = Datarepr.labels_of_type path info in
+        Type_record (List.map snd labels, repr),
+        List.fold_left
+          (fun env (lbl_id, lbl) ->
+            store_label ~check info id lbl_id lbl env)
+          env labels
+    | Type_abstract r -> Type_abstract r, env
+    | Type_open -> Type_open, env
+    | Type_external name -> Type_external name, env
+  in
+  let tda =
+    { tda_declaration = info;
+      tda_descriptions = descrs;
+      tda_shape = shape }
+  in
+  Builtin_attributes.mark_alerts_used info.type_attributes;
+  { env with
+    types = IdTbl.add id tda env.types;
+    summary = Env_type(env.summary, id, info) }
+
+and store_type_infos ~tda_shape id info env =
+  (* Simplified version of store_type that doesn't compute and store
+     constructor and label infos, but simply record the arity and
+     manifest-ness of the type.  Used in components_of_module to
+     keep track of type abbreviations (e.g. type t = float) in the
+     computation of label representations. *)
+  let tda =
+    {
+      tda_declaration = info;
+      tda_descriptions = Type_abstract (Btype.type_origin info);
+      tda_shape
+    }
+  in
+  { env with
+    types = IdTbl.add id tda env.types;
+    summary = Env_type(env.summary, id, info) }
+
+and store_extension ~check ~rebind id addr ext shape env =
+  let loc = ext.ext_loc in
+  let cstr =
+    Datarepr.extension_descr
+      ~current_unit:(get_current_unit ()) (Pident id) ext
+  in
+  let cda =
+    { cda_description = cstr;
+      cda_address = Some addr;
+      cda_shape = shape }
+  in
+  Builtin_attributes.mark_alerts_used ext.ext_attributes;
+  Builtin_attributes.mark_warn_on_literal_pattern_used ext.ext_attributes;
+  Builtin_attributes.warning_scope ext.ext_attributes (fun () ->
+  if check && not loc.Location.loc_ghost &&
+    Warnings.is_active (Warnings.Unused_extension ("", false, Unused))
+  then begin
+    let priv = ext.ext_private in
+    let is_exception = Path.same ext.ext_type_path Predef.path_exn in
+    let name = cstr.cstr_name in
+    let k = cstr.cstr_uid in
+    if not (Types.Uid.Tbl.mem !used_constructors k) then begin
+      let used = constructor_usages () in
+      Types.Uid.Tbl.add !used_constructors k
+        (add_constructor_usage used);
+      !add_delayed_check_forward
+         (fun () ->
+           Option.iter
+             (fun complaint ->
+                if not (is_in_signature env) then
+                  Location.prerr_warning loc
+                    (Warnings.Unused_extension
+                       (name, is_exception, complaint)))
+             (constructor_usage_complaint ~rebind priv used))
+    end;
+  end);
+  { env with
+    constrs = TycompTbl.add id cda env.constrs;
+    summary = Env_extension(env.summary, id, ext) }
+
+and store_module ?(update_summary=true) ~check
+                 id addr presence md shape env =
+  let open Subst.Lazy in
+  let loc = md.mdl_loc in
+  Option.iter
+    (fun f -> check_usage loc id md.mdl_uid f !module_declarations) check;
+  Builtin_attributes.mark_alerts_used md.mdl_attributes;
+  let alerts = Builtin_attributes.alerts_of_attrs md.mdl_attributes in
+  let comps =
+    components_of_module ~alerts ~uid:md.mdl_uid
+      env Subst.identity (Pident id) addr md.mdl_type shape
+  in
+  let mda =
+    { mda_declaration = md;
+      mda_components = comps;
+      mda_address = addr;
+      mda_shape = shape }
+  in
+  let summary =
+    if not update_summary then env.summary
+    else Env_module (env.summary, id, presence, force_module_decl md) in
+  { env with
+    modules = IdTbl.add id (Mod_local mda) env.modules;
+    summary }
+
+and store_modtype ?(update_summary=true) id info shape env =
+  Builtin_attributes.mark_alerts_used info.Subst.Lazy.mtdl_attributes;
+  let mtda = { mtda_declaration = info; mtda_shape = shape } in
+  let summary =
+    if not update_summary then env.summary
+    else Env_modtype (env.summary, id, Subst.Lazy.force_modtype_decl info) in
+  { env with
+    modtypes = IdTbl.add id mtda env.modtypes;
+    summary }
+
+and store_class id addr desc shape env =
+  Builtin_attributes.mark_alerts_used desc.cty_attributes;
+  let clda =
+    { clda_declaration = desc;
+      clda_address = addr;
+      clda_shape = shape; }
+  in
+  { env with
+    classes = IdTbl.add id clda env.classes;
+    summary = Env_class(env.summary, id, desc) }
+
+and store_cltype id desc shape env =
+  Builtin_attributes.mark_alerts_used desc.clty_attributes;
+  let cltda = { cltda_declaration = desc; cltda_shape = shape } in
+  { env with
+    cltypes = IdTbl.add id cltda env.cltypes;
+    summary = Env_cltype(env.summary, id, desc) }
 
 let scrape_alias env mty = scrape_alias env mty
 
@@ -2663,7 +2638,7 @@ let persistent_structures_of_dir dir =
 
 (* Save a signature to a file *)
 let save_signature_with_transform cmi_transform ~alerts sg cmi_info =
-  Btype.cleanup_abbrev_memo ();
+  Btype.cleanup_abbrev ();
   Subst.reset_for_saving ();
   let sg = Subst.signature Make_local (Subst.for_saving Subst.identity) sg in
   let cmi =
@@ -3355,14 +3330,8 @@ let lookup_cltype ?(use=true) ~loc lid env =
   lookup_cltype ~errors:true ~use ~loc lid env
 
 let lookup_all_constructors ?(use=true) ~loc usage lid env =
-  match
-    (* We don't want errors to be logged here, as the caller will process them
-       (and log them if they see fit). *)
-    Typing_recovery.uncatch_errors (fun () ->
-      lookup_all_constructors ~errors:true ~use ~loc usage lid env
-    )
-  with
-  | exception Error.In_context (Lookup_error(loc', env', err)) ->
+  match lookup_all_constructors ~errors:true ~use ~loc usage lid env with
+  | exception Error(Lookup_error(loc', env', err)) ->
       (Error(loc', env', err) : _ result)
   | cstrs -> Ok cstrs
 
@@ -3373,14 +3342,8 @@ let lookup_all_constructors_from_type ?(use=true) ~loc usage ty_path env =
   lookup_all_constructors_from_type ~use ~loc usage ty_path env
 
 let lookup_all_labels ?(use=true) ~loc usage lid env =
-  match
-    (* We don't want errors to be logged here, as the caller will process them
-       (and log them if they see fit). *)
-    Typing_recovery.uncatch_errors (fun () ->
-      lookup_all_labels ~errors:true ~use ~loc usage lid env
-    )
-  with
-  | exception Error.In_context (Lookup_error(loc', env', err)) ->
+  match lookup_all_labels ~errors:true ~use ~loc usage lid env with
+  | exception Error(Lookup_error(loc', env', err)) ->
       (Error(loc', env', err) : _ result)
   | lbls -> Ok lbls
 
@@ -3910,7 +3873,7 @@ let report_error_doc = function
 let () =
   Location.register_error_of_exn
     (function
-      | Error.In_context err ->  Some (report_error_doc err)
+      | Error err ->  Some (report_error_doc err)
       | _ ->
           None
     )

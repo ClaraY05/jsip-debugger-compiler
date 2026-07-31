@@ -1,6 +1,6 @@
 (* TEST
  modules = "stubs.c";
- not tsan; (* Takes too much time and memory with tsan *)
+ no-tsan; (* Takes too much time and memory with tsan *)
  {
    bytecode;
  }

@@ -29,16 +29,10 @@
 #include "caml/instruct.h"
 #include "caml/misc.h"
 #include "caml/mlvalues.h"
+#include "caml/opnames.h"
 #include "caml/prims.h"
 #include "caml/startup.h"
 #include "caml/backtrace_prim.h"
-
-#define OPCODE_NAME(name) #name,
-static char const * const names_of_instructions [] = {
-  CAML_ZINC_OPCODES(OPCODE_NAME)
-  "FIRST_UNIMPLEMENTED_OP"
-};
-#undef OPCODE_NAME
 
 extern code_t caml_start_code;
 
@@ -124,7 +118,7 @@ void caml_disasm_instr(code_t pc)
 void
 caml_trace_value_file (value v, code_t prog, asize_t proglen, FILE * f)
 {
-  fprintf (f, "%#" CAML_PRIxNAT, (uintnat) v);
+  fprintf (f, "%#" CAML_PRIxNAT, v);
   if (!v)
     return;
   if (prog && v % sizeof (int) == 0
@@ -183,7 +177,7 @@ caml_trace_value_file (value v, code_t prog, asize_t proglen, FILE * f)
         };
         if (i > 0)
           putc (' ', f);
-        fprintf (f, "%#" CAML_PRIxNAT, (uintnat) Field (v, i));
+        fprintf (f, "%#" CAML_PRIxNAT, Field (v, i));
       };
       if (s > 0)
         putc (')', f);
@@ -200,7 +194,7 @@ caml_trace_accu_sp_file (value accu, value * sp, code_t prog, asize_t proglen,
   fprintf (f, "accu=");
   caml_trace_value_file (accu, prog, proglen, f);
   fprintf (f, "\n sp=%#" CAML_PRIxNAT " @%ld:",
-           (uintnat) sp, (long) (Stack_high(Caml_state->current_stack) - sp));
+           (intnat) sp, (long) (Stack_high(Caml_state->current_stack) - sp));
   for (p = sp, i = 0;
        i < 12 + (1 << caml_params->trace_level) &&
          p < Stack_high(Caml_state->current_stack);
