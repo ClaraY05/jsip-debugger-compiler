@@ -2443,13 +2443,14 @@ typing/vreplay_instrumentation.cmo : \
     typing/typecore.cmi \
     typing/tast_mapper.cmi \
     typing/shape.cmi \
-    typing/predef.cmi \
     parsing/pprintast.cmi \
     typing/path.cmi \
+    utils/misc.cmi \
     parsing/longident.cmi \
     parsing/location.cmi \
     typing/ident.cmi \
     typing/env.cmi \
+    typing/ctype.cmi \
     parsing/asttypes.cmi \
     parsing/ast_helper.cmi \
     typing/vreplay_instrumentation.cmi
@@ -2462,13 +2463,14 @@ typing/vreplay_instrumentation.cmx : \
     typing/typecore.cmx \
     typing/tast_mapper.cmx \
     typing/shape.cmx \
-    typing/predef.cmx \
     parsing/pprintast.cmx \
     typing/path.cmx \
+    utils/misc.cmx \
     parsing/longident.cmx \
     parsing/location.cmx \
     typing/ident.cmx \
     typing/env.cmx \
+    typing/ctype.cmx \
     parsing/asttypes.cmx \
     parsing/ast_helper.cmx \
     typing/vreplay_instrumentation.cmi
