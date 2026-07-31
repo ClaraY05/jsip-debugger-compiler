@@ -60,15 +60,15 @@ module Wire = struct
     let ty id =
       Ast_helper.Typ.constr (Location.mknoloc (Longident.Lident id)) []
     in
-    Ast_helper.Prim.mk_decl ~prim:[ emit_c_name ]
+    Ast_helper.Val.mk ~prim:[ emit_c_name ]
       (Location.mknoloc emit_name)
       (Ast_helper.Typ.arrow Nolabel (ty "string") (ty "unit"))
 
   (* type [__wire_emit <payload>]: the typedtree's envs were snapshotted
      before [emit_decl] was spliced in, so re-add the prim *)
-  let emit (prim : Typedtree.primitive_description) env payload =
+  let emit (prim : Typedtree.value_description) env payload =
     Typecore.type_expression
-      (Env.add_value prim.prim_id prim.prim_val env)
+      (Env.add_value prim.val_id prim.val_val env)
       (Ast_helper.Exp.apply
          (Ast_helper.Exp.ident
             (Location.mknoloc (Longident.Lident emit_name)))
@@ -120,7 +120,7 @@ let uid_comp_unit : Shape.Uid.t -> string option = function
 
 (* [e]'s head type constructor is declared in [comp_unit] *)
 let is_structure comp_unit (e : Typedtree.expression) =
-  match Types.get_desc (Ctype.expand_head_nolink e.exp_env e.exp_type) with
+  match Types.get_desc (Ctype.expand_head e.exp_env e.exp_type) with
   | Types.Tconstr (path, _, _) ->
     begin match Env.find_type path e.exp_env with
     | decl ->
@@ -134,7 +134,7 @@ let is_structure comp_unit (e : Typedtree.expression) =
 
 (* partial application: the call leaves an arrow *)
 let is_partial (e : Typedtree.expression) =
-  match Types.get_desc (Ctype.expand_head_nolink e.exp_env e.exp_type) with
+  match Types.get_desc (Ctype.expand_head e.exp_env e.exp_type) with
   | Types.Tarrow _ -> true
   | _ -> false
 
@@ -346,7 +346,7 @@ let instrument_call ?inject_before ~inject_after
 (* rewrite each [Texp_apply] that [classify] marks as an event: the
    post-call hook hands the traversal root to [Vreplay.snapshot], which
    owns identity (the weak registry), the C walk and the sexp emit *)
-let inject_mapper (emit_prim : Typedtree.primitive_description) =
+let inject_mapper (emit_prim : Typedtree.value_description) =
   let super = Tast_mapper.default in
   let emit env payload = Wire.emit emit_prim env payload in
 
@@ -388,7 +388,7 @@ let inject_instrumentation ~inject (tast : Typedtree.implementation) =
       | [] -> structure.str_final_env
     in
     let emit_prim, _env =
-      Typedecl.transl_prim_desc decl_env Location.none Wire.emit_decl
+      Typedecl.transl_value_decl decl_env Location.none Wire.emit_decl
     in
     let mapper = inject_mapper emit_prim in
     let structure = mapper.Tast_mapper.structure mapper structure in
