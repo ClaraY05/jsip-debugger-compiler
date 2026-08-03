@@ -2906,6 +2906,15 @@ endif
 endif
 	$(MAKE) -C stdlib install
 
+# The -visual-replay runtime library, so the "+vreplay" load-path entry
+# (see driver/compmisc.ml) resolves in an installed compiler
+common-install::
+	$(call INSTALL_ITEMS, \
+	  vreplay/data_structure.cmi vreplay/data_structure.mli \
+	  vreplay/sexp.cmi vreplay/sexp.mli \
+	  vreplay/vreplay.cmi vreplay/vreplay.mli vreplay/vreplay.cma, \
+	  lib, vreplay)
+
 define INSTALL_ONE_NAT_TOOL
 common-install::
 ifeq "$(NATIVE_COMPILER)" "true"
