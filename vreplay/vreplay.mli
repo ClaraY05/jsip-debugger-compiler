@@ -19,6 +19,7 @@ type block = Sexp.block =
   | Id of int
 
 type node = Sexp.node = {
+  id : int;
   virtual_address : nativeint;
   block : (string * block) list;
   children : node list;
@@ -50,6 +51,18 @@ val from_sexp : Sexp.t -> t
    the interface repo's own type shapes (see Sexp.sexp_of_loc/fn/args).
    No-ops when [ds] is not a known data structure or [root] is
    immediate.
+
+   Dumps are DELTAS (see sexp.mli): every node carries a wire id,
+   unique across the dump, and for immutable structures (Map/Set) a
+   block is dumped at most once, ever -- the runtime remembers dumped
+   blocks weakly, walks stop at any of them with an [Id] reference, and
+   a re-observed structure emits just a revisit stub.  So an event for
+   [Map.add] carries only the rebuilt path; the subtrees it shares with
+   earlier versions stay [Id]s, which is how a reader detects the
+   sharing.  Mutable structures (Queue/Hashtbl) re-walk in full at
+   every event, their cells taking fresh ids each time.  One accepted
+   consequence: a payload block mutated AFTER its structure was dumped
+   keeps showing its dump-time contents (it is never re-walked).
 
    [name] is the source identifier the root was observed under -- the
    [let] binder for a bound result, a mutated container argument's own

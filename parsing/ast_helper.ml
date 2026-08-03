@@ -662,6 +662,3 @@ module Of = struct
   let inherit_ ?loc ty =
     mk ?loc (Oinherit ty)
 end
-
-  
-

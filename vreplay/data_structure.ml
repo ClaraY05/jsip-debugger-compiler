@@ -18,6 +18,15 @@ let of_module = function
   | "Hashtbl" -> Some Hashtbl
   | _ -> None
 
+(* Map and Set values never change after creation (operations build new
+   versions that share subtrees), so their dumped blocks keep meaning
+   across events: the runtime remembers them weakly and later walks
+   stop at them with [Id] references.  Queue and Hashtbl mutate in
+   place and are re-walked in full at every event instead. *)
+let is_immutable = function
+  | Map | Set -> true
+  | Queue | Hashtbl -> false
+
 type layer =
   | Fixed of
       { labels : string list

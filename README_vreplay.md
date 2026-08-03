@@ -6,7 +6,7 @@ there is a vreplay folder with modules inside in this repo. these are not part o
 
 
 
-dependencis for separate vreplay folder so far include: 
+dependencis for separate vreplay folder so far include:
 - Core
 
 ## Where the dump goes

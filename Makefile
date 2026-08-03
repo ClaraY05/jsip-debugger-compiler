@@ -863,8 +863,11 @@ endif
 # -visual-replay (see bytecomp/bytelink.ml) and finds via "+vreplay" on the
 # load path (see driver/compmisc.ml).  Built with the freshly-built ./ocamlc
 # (run through the just-built runtime, since ./ocamlc's shebang points at the
-# not-yet-installed ocamlrun) against the in-tree stdlib.
-VREPLAY_OCAMLC = $(NEW_OCAMLRUN) ./ocamlc -nostdlib -I stdlib -I vreplay
+# not-yet-installed ocamlrun) against the in-tree stdlib.  -g matches the
+# rest of the tree's libraries: test_in_prefix classifies an installed .cma
+# by its debug-info paths, and a stripped vreplay.cma reads as relocatable
+# where a non-relocatable build is expected.
+VREPLAY_OCAMLC = $(NEW_OCAMLRUN) ./ocamlc -g -nostdlib -I stdlib -I vreplay
 .PHONY: vreplay
 vreplay: vreplay/vreplay.cma
 vreplay/data_structure.cmi: vreplay/data_structure.mli ocamlc \
@@ -889,6 +892,10 @@ vreplay/vreplay.cma: vreplay/data_structure.cmo vreplay/sexp.cmo \
     vreplay/vreplay.cmo ocamlc
 	$(VREPLAY_OCAMLC) -a -o $@ vreplay/data_structure.cmo \
 	    vreplay/sexp.cmo vreplay/vreplay.cmo
+# The library's artefacts are gitignored, so a distclean that left them
+# behind fails CI's "tree is clean after distclean" check.
+partialclean::
+	rm -f vreplay/*.cm*
 
 # Bootstrap and rebuild the whole system.
 # The compilation of ocaml will fail if the runtime has changed.
@@ -2461,8 +2468,8 @@ ocamlprof_SOURCES = \
   pprintast.mli pprintast.ml \
   parse.mli parse.ml \
   parsetree.mli \
-  ocamlprof.mli ocamlprof.ml 
-  
+  ocamlprof.mli ocamlprof.ml
+
 
 ocamlcp_ocamloptp_SOURCES = \
   config.mli config.ml \
