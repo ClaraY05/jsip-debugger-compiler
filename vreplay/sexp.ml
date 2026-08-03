@@ -114,8 +114,11 @@ let of_string s =
 
 (* ---- the wire schema ----
    Constructor and field ORDER MUST match runtime/snapshot.c (block
-   constructors 0..8 and node fields 0..2 in declaration order).  See
-   sexp.mli for the representation mapping these constructors mirror. *)
+   constructors 0..8 and node fields 0..2 in declaration order).
+   [Child] carries no argument, so it is the first CONSTANT constructor
+   -- an immediate, which is why adding it leaves the boxed tags 0..8
+   alone.  See sexp.mli for the representation mapping these
+   constructors mirror. *)
 
 type block =
   | Int of int
@@ -127,6 +130,7 @@ type block =
   | Float_array of float list
   | Address of nativeint
   | Id of int
+  | Child
 
 type node = {
   id : int;
@@ -169,8 +173,10 @@ let sexp_of_block = function
     List [ Atom "Float_array"; List (List.map (fun f -> Atom (fstr f)) fs) ]
   | Address a -> List [ Atom "Address"; Atom (hex a) ]
   | Id i -> List [ Atom "Id"; Atom (string_of_int i) ]
+  | Child -> Atom "Child"
 
 let block_from_sexp = function
+  | Atom "Child" -> Child
   | List [ Atom "Int"; Atom s ] -> Int (int_of_string s)
   | List [ Atom "Float"; Atom s ] -> Float (float_of_string s)
   | List [ Atom "String"; Atom s ] -> String s

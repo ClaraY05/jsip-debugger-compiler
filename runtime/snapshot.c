@@ -532,6 +532,12 @@ static value alloc_block(const cfield *fl)
         bx = caml_alloc(1, 8);
         Store_field(bx, 0, Val_long(fl->ival));
         break;
+    case F_CHILD:
+        /* [Child]: the sole CONSTANT constructor, so an immediate --
+         * which is why it does not disturb the boxed tags above.  It
+         * stands in [block] for the next node of [children]. */
+        bx = Val_long(0);
+        break;
     default:                               /* F_ADDR */
         bx = caml_alloc(1, 7);
         Store_field(bx, 0, caml_copy_nativeint((intnat)fl->ptr));
@@ -787,8 +793,7 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
         lst = Val_emptylist;
         for (mlsize_t j = c->nfields; j-- > 0; ) {
             cfield *fl = &c->fields[j];
-            if (fl->k == F_CHILD) continue;
-            bx = alloc_block(fl);
+            bx = alloc_block(fl);   /* F_CHILD becomes the [Child] marker */
             ent = caml_alloc(2, 0);
             Store_field(ent, 0, caml_copy_string(fl->label));
             Store_field(ent, 1, bx);

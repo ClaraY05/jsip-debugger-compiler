@@ -56,20 +56,23 @@ type block =
   | Float_array of float list
   | Address of nativeint
   | Id of int
+  | Child                           (* value is the next node in [children] *)
 
 type node = {
   id : int;                         (* wire id, unique across the dump *)
   virtual_address : nativeint;      (* the block's address at snapshot time *)
-  block : (string * block) list;    (* labeled meaningful data fields *)
-  children : node list;             (* masked fields that are DS-internal *)
+  block : (string * block) list;    (* every kept field, labeled *)
+  children : node list;             (* the blocks [Child] stands in for *)
 }
 
-(* Both lists preserve field order, and [block] holds every masked
-   non-child field -- so a masked field absent from [block] was a child,
-   and the k-th such absence is [children]'s k-th node.  That is how a
-   reader recovers which side (l/r) a child hung off.  ([Id] fields sit
-   in [block] like any other leaf, so the rule is unaffected by
-   sharing.)
+(* [block] holds EVERY kept field, in field order, under the label the
+   walker gave it; a field whose value is a block of its own reads
+   [Child] and stands for [children]'s next node, in order.  So a
+   reader needs no layout of its own to name anything -- not a user
+   record's fields, not which side (l/r) a map child hung off -- because
+   every name is written down beside the field it belongs to.  ([Id]
+   fields sit in [block] like any other leaf, so sharing is
+   unaffected.)
 
    Dumps are DELTAS.  For immutable structures (Map/Set) a block is
    dumped -- given a node with a fresh [(id n)] -- at most once in the

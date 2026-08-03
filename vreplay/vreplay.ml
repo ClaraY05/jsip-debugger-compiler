@@ -26,6 +26,7 @@ type block = Sexp.block =
   | Float_array of float list
   | Address of nativeint
   | Id of int
+  | Child
 
 type node = Sexp.node = {
   id : int;

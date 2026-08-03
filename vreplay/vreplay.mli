@@ -17,6 +17,7 @@ type block = Sexp.block =
   | Float_array of float list
   | Address of nativeint
   | Id of int
+  | Child
 
 type node = Sexp.node = {
   id : int;
@@ -99,5 +100,5 @@ val snapshot :
    and [kind] is 0 for a fixed-size block (record, tuple, list cell) or
    1 for an array whose every slot takes the single entry in [fields].
    Entries may refer to themselves: that is how a list cell's tail and
-   a recursive record close their loop.  Not yet consumed here -- the
-   walker gains schema-directed labelling next. *)
+   a recursive record close their loop.  [Data_structure.payload_roles]
+   says which field of which layer each role attaches to. *)
