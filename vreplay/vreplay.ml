@@ -46,13 +46,16 @@ let from_sexp = Sexp.from_sexp
 (* One [Data_structure.layer], flattened for the C walker: the block
    shapes the layer accepts, then -- for an array layer -- whether its
    elements are user data and where its live window is.  A [tag] of -1
-   accepts any tag; an absent window field is -1.  Field ORDER is the
-   contract with runtime/snapshot.c, as it is for [node] and [block]. *)
+   accepts any tag; an absent window field is -1.  [targets] gives, per
+   field, the layer an interior edge out of it leads to, -1 for the
+   default (one layer deeper).  Field ORDER is the contract with
+   runtime/snapshot.c, as it is for [node] and [block]. *)
 type flat_shape = {
   tag : int;
   labels : string array;
   interior : int;
   payload : int;
+  targets : int array;
 }
 
 type flat_layer = {
@@ -113,26 +116,40 @@ let plain_layer = {
   win_newest_first = false;
 }
 
-let flatten_shape (s : Data_structure.shape) =
+(* the layer each of [labels]'s fields leads to, by name; -1 (the
+   default, one layer deeper) wherever the layout named nothing *)
+let flatten_targets targets labels =
+  Array.map
+    (fun label ->
+       match List.assoc_opt label targets with
+       | Some layer -> layer
+       | None -> -1)
+    labels
+
+let flatten_shape targets (s : Data_structure.shape) =
+  let labels = Array.of_list s.Data_structure.labels in
   { tag = (match s.Data_structure.tag with None -> -1 | Some t -> t)
-  ; labels = Array.of_list s.Data_structure.labels
+  ; labels
   ; interior = s.Data_structure.interior
-  ; payload = s.Data_structure.payload }
+  ; payload = s.Data_structure.payload
+  ; targets = flatten_targets targets labels }
 
 (* a window's field indices: -1 where the layout named no field *)
 let win_field = function None -> -1 | Some i -> i
 
-let flatten_layer : Data_structure.layer -> flat_layer = function
+let flatten_layer targets : Data_structure.layer -> flat_layer = function
   | Data_structure.Fixed { labels; interior; payload } ->
+    let labels = Array.of_list labels in
     { plain_layer with
       shapes =
         [| { tag = -1
-           ; labels = Array.of_list labels
+           ; labels
            ; interior
-           ; payload } |] }
+           ; payload
+           ; targets = flatten_targets targets labels } |] }
   | Data_structure.Cases shapes ->
     { plain_layer with
-      shapes = Array.of_list (List.map flatten_shape shapes) }
+      shapes = Array.of_list (List.map (flatten_shape targets) shapes) }
   | Data_structure.Array_elements { elements; window } ->
     let layer =
       { plain_layer with
@@ -411,7 +428,16 @@ let snapshot ~loc ~fn ~ds ~args ~name ~ty ~schema root =
     if not (Obj.is_block r) then ()          (* immediates have no identity *)
     else begin
       let layers =
-        Array.of_list (List.map flatten_layer (Data_structure.layout ds_ty))
+        let targets = Data_structure.interior_targets ds_ty in
+        Array.of_list
+          (List.mapi
+             (fun i layer ->
+                flatten_layer
+                  (match List.assoc_opt i targets with
+                   | Some t -> t
+                   | None -> [])
+                  layer)
+             (Data_structure.layout ds_ty))
       in
       let schema_entries, schema_roles = schema in
       let schemas =

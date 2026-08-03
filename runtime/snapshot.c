@@ -299,6 +299,8 @@ typedef struct {
     mlsize_t nlabels;    /* the block's exact field count */
     uintnat  interior;   /* bitmask: fields one layer deeper */
     uintnat  payload;    /* bitmask: user-data fields */
+    long    *targets;    /* owned; per field, the layer an interior edge
+                          * out of it leads to, -1 for one deeper */
 } cshape;
 
 typedef struct {
@@ -351,6 +353,15 @@ static clayer *layers_of_value(value v_layers, mlsize_t *out_n)
                 cs->labels[i] = strdup(String_val(Field(v_labels, i)));
             cs->interior = (uintnat)Long_val(Field(sh, 2));
             cs->payload  = (uintnat)Long_val(Field(sh, 3));
+            {
+                value v_targets = Field(sh, 4);
+                cs->targets =
+                    cs->nlabels ? malloc(sizeof(long) * cs->nlabels) : NULL;
+                for (mlsize_t i = 0; i < cs->nlabels; i++)
+                    cs->targets[i] =
+                        i < Wosize_val(v_targets)
+                        ? (long)Long_val(Field(v_targets, i)) : -1L;
+            }
         }
         ls[k].is_array         = Bool_val(Field(ly, 1));
         ls[k].elements_payload = Bool_val(Field(ly, 2));
@@ -373,6 +384,7 @@ static void layers_free(clayer *ls, mlsize_t n)
             for (mlsize_t i = 0; i < cs->nlabels; i++)
                 free(cs->labels[i]);
             free(cs->labels);
+            free(cs->targets);
         }
         free(ls[k].shapes);
     }
@@ -957,9 +969,14 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
                     int in_p = i < 8 * sizeof(uintnat)
                                && ((sh->payload >> i) & 1u);
                     keep = in_i || in_p;      /* neither: bookkeeping */
-                    if (in_i)
-                        child_mode = deeper;
-                    else {
+                    if (in_i) {
+                        /* one layer deeper, unless the shape sends this
+                         * field somewhere else: an element's chain stays
+                         * on its own layer while its payload steps down */
+                        long t = i < sh->nlabels ? sh->targets[i] : -1L;
+                        child_mode = t >= 0 && (mlsize_t)t < nlayers
+                                     ? t : deeper;
+                    } else {
                         /* a payload edge: hand the user data below it
                          * to the schema for this slot's role, if the
                          * instrumentation could describe one */
@@ -999,12 +1016,16 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
                         } else {
                             idx = (long)seen.len;
                             vec_push(&seen, f);
-                            /* an interior edge carries the window this
-                             * cell computed; every other edge carries
-                             * none */
+                            /* the window (if the layer it lands on takes
+                             * one) is read from THIS cell, which is the
+                             * parent holding the bounds */
                             mvec_push(&modes,
-                                      child_mode == deeper
-                                      ? child : mode_at(child_mode));
+                                      child_mode == deeper ? child
+                                      : (child_mode >= 0
+                                         && layers[child_mode].windowed)
+                                        ? window_from(&layers[child_mode],
+                                                      v, n, child_mode)
+                                        : mode_at(child_mode));
                             lvec_push(&par_parent, (long)head);
                             lvec_push(&par_field, (long)i);
                             itab_put(&seen_tab, (uintnat)f, idx);

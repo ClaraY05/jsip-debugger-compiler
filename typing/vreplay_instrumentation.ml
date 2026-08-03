@@ -162,7 +162,9 @@ let ds_of_type_unit : (string * string) list =
   ; "Core__Fdeque_intf", "Core_fdeque"
   ; "Core__Fqueue", "Core_fdeque"
   ; "Core__Doubly_linked", "Core_doubly_linked"
-  ; "Core__Doubly_linked_intf", "Core_doubly_linked" ]
+  ; "Core__Doubly_linked_intf", "Core_doubly_linked"
+  ; "Core__Hash_queue", "Core_hash_queue"
+  ; "Core__Hash_queue_intf", "Core_hash_queue" ]
 
 (* The modules whose calls are events: the unit a called function is
    declared in -- for Base and Core usually the _intf unit its module
@@ -219,7 +221,9 @@ let ds_table : (string * (mutability * string list)) list =
   ; "Core__Fdeque_intf", (Immutable, [ "Core_fdeque" ])
   ; "Core__Fqueue", (Immutable, [ "Core_fdeque" ])
   ; "Core__Doubly_linked", (Mutable, [ "Core_doubly_linked" ])
-  ; "Core__Doubly_linked_intf", (Mutable, [ "Core_doubly_linked" ]) ]
+  ; "Core__Doubly_linked_intf", (Mutable, [ "Core_doubly_linked" ])
+  ; "Core__Hash_queue", (Mutable, [ "Core_hash_queue" ])
+  ; "Core__Hash_queue_intf", (Mutable, [ "Core_hash_queue" ]) ]
 
 (* declaring unit of a uid. [Subst] copies uids verbatim, so [Item]
    survives [Map.Make], [include], [open] and aliasing.
@@ -398,6 +402,14 @@ let role_types env ~ds ty =
     | "Set", [] -> sibling "elt"
     | "Queue", [ elt ] -> [ ("elt", elt) ]
     | "Hashtbl", [ key; data ] -> [ ("key", key); ("data", data) ]
+    (* Base and Core carry theirs as ordinary arguments, a comparator
+       or hash witness trailing the ones that mean something; a hash set
+       is a table of unit, so its element is the KEY position *)
+    | ("Core_map" | "Core_hashtbl" | "Core_hash_queue"), (key :: data :: _)
+      -> [ ("key", key); ("data", data) ]
+    | ("Core_set" | "Core_hash_set" | "Core_queue" | "Core_stack"
+      | "Core_deque" | "Core_fdeque" | "Core_doubly_linked" | "Stack"
+      | "Dynarray"), (elt :: _) -> [ ("elt", elt) ]
     | _ -> []
     end
   | _ -> []
@@ -572,14 +584,21 @@ let is_stdlib_unit unit =
    Read WITHOUT [Ctype.expand_head]: expanding follows an alias like
    [type trades = trade list] down to the predef [list] and would
    reject exactly the declarations worth observing.  A bare tuple is
-   not a [Tconstr] at all, so it never qualifies either. *)
+   not a [Tconstr] at all, so it never qualifies either.
+
+   A CATALOGUED container is not the program's own, whichever library
+   declared it: the container path already observes it, with the call
+   that built it and the roles of its contents, so observing the binding
+   as well would emit the same value twice under worse metadata. *)
 let is_user_declared (e : Typedtree.expression) =
   match Types.get_desc e.exp_type with
   | Types.Tconstr (path, _, _) ->
     begin match Env.find_type path e.exp_env with
     | decl ->
       begin match uid_comp_unit decl.type_uid with
-      | Some unit -> not (is_stdlib_unit unit)
+      | Some unit ->
+        not (is_stdlib_unit unit)
+        && not (List.mem_assoc unit ds_of_type_unit)
       | None -> false
       end
     | exception Not_found -> false
@@ -801,15 +820,18 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
        variant, an abstract one) would dump an unlabelled block, which
        is no better than the numbering this replaces. *)
     match binder with
-    | Some (name, _) when is_user_declared vb.vb_expr ->
+    | Some (name, bound) when is_user_declared bound ->
       let ((_ : schema_entry list), roles) as schema =
-        root_schema ~ds:user_ds vb.vb_expr
+        root_schema ~ds:user_ds bound
       in
       begin match roles with
       | [] -> vb
       | _ :: _ ->
-        let wire = Wire.format_binding vb.vb_expr in
-        let ty = root_ty ~ds:user_ds vb.vb_expr in
+        (* the binding as the program WROTE it: [vb_expr] has been
+           rewritten by now, and printing that would put this pass's own
+           injected code on the wire as the event's source text *)
+        let wire = Wire.format_binding bound in
+        let ty = root_ty ~ds:user_ds bound in
         let hooks =
           [ (fun env ->
                snapshot_call env ~loc:wire.Wire.location
