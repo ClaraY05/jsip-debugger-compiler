@@ -24,6 +24,7 @@ type t =
   | Core_deque
   | Core_fdeque
   | Core_doubly_linked
+  | Core_hash_queue
   (* [User] is not a container: it is any type the user's own program
      declared, whose shape comes from the schema the instrumentation
      derived rather than from a hand-written layout here. *)
@@ -124,6 +125,17 @@ type layer =
    -- keeps its own layer forever).  Empty only for [User], which has
    no skeleton of its own to describe. *)
 val layout : t -> layer list
+
+(* Where an interior field leads when it is NOT one layer deeper:
+   (layer index, [(field LABEL, the layer that field leads to)]).
+   Layers absent from the list, and fields absent from a layer's list,
+   take the default.
+
+   That default describes a structure nesting uniformly, which most do.
+   A hash queue does not: its elements chain through [next] on their own
+   layer while [value] steps DOWN to the key/data pair, so one shape's
+   two interior fields lead to two different layers. *)
+val interior_targets : t -> (int * (string * int) list) list
 
 (* Which payload field of each layer carries which role of the event's
    [ty] -- (field LABEL, role name), one list per layer of [layout].

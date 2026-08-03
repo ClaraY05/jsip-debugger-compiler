@@ -27,9 +27,14 @@ type 'a t = 'a Elt.t option ref
 
 let create () : _ t = ref None
 
-let insert_last t value =
+(* Core's own returns the element, which is what lets a hash queue index
+   its list by key. *)
+let insert_last_elt t value =
   match !t with
-  | None -> t := Some (Elt.create value (Header.create ()))
+  | None ->
+    let elt = Elt.create value (Header.create ()) in
+    t := Some elt;
+    elt
   | Some head ->
     let last = head.Elt.prev in
     let elt =
@@ -37,4 +42,7 @@ let insert_last t value =
     in
     last.Elt.next <- elt;
     head.Elt.prev <- elt;
-    head.Elt.header.Header.length <- head.Elt.header.Header.length + 1
+    head.Elt.header.Header.length <- head.Elt.header.Header.length + 1;
+    elt
+
+let insert_last t value = ignore (insert_last_elt t value : _ Elt.t)

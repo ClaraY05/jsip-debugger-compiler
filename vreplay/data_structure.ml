@@ -16,6 +16,7 @@ type t =
   | Core_deque
   | Core_fdeque
   | Core_doubly_linked
+  | Core_hash_queue
   | User
 
 let to_string = function
@@ -34,6 +35,7 @@ let to_string = function
   | Core_deque -> "Core_deque"
   | Core_fdeque -> "Core_fdeque"
   | Core_doubly_linked -> "Core_doubly_linked"
+  | Core_hash_queue -> "Core_hash_queue"
   | User -> "User"
 
 (* The catalogue name the instrumentation passes at each event
@@ -55,6 +57,7 @@ let of_name = function
   | "Core_deque" -> Some Core_deque
   | "Core_fdeque" -> Some Core_fdeque
   | "Core_doubly_linked" -> Some Core_doubly_linked
+  | "Core_hash_queue" -> Some Core_hash_queue
   | "User" -> Some User
   | _ -> None
 
@@ -68,8 +71,8 @@ let of_name = function
 let is_immutable = function
   | Map | Set | Core_map | Core_set | Core_fdeque -> true
   | Queue | Hashtbl | Stack | Dynarray | Core_hashtbl | Core_hash_set
-  | Core_queue | Core_stack | Core_deque | Core_doubly_linked | User ->
-    false
+  | Core_queue | Core_stack | Core_deque | Core_doubly_linked
+  | Core_hash_queue | User -> false
 
 type shape =
   { tag : int option
@@ -383,10 +386,51 @@ let layout = function
           ; interior = 0b0100 (* next *)
           ; payload = 0b0001 (* v *)
           } ] ]
+  (* Core Hash_queue: the root is  {num_readers; queue; table}, where
+     [queue] is a Doubly_linked.t of  Key_value {key; value}  pairs in
+     queue order and [table] maps each key to the ELEMENT holding it.
+     That table indexes the very cells [queue] already holds, so walking
+     it would dump the whole queue a second time, cross-linked; it stays
+     bookkeeping and the queue IS the structure.  The element layer is
+     the doubly-linked one, so [next] stays on it while [v] steps down
+     to the pair -- see [interior_targets]. *)
+  | Core_hash_queue ->
+    [ Fixed
+        { labels = [ "num_readers"; "queue"; "table" ]
+        ; interior = 0b010 (* queue *)
+        ; payload = 0b000
+        }
+    ; Fixed { labels = [ "contents" ]; interior = 0b1; payload = 0b0 }
+    ; Cases
+        [ { tag = Some 0 (* Some *)
+          ; labels = [ "0" ]
+          ; interior = 0b1
+          ; payload = 0b0
+          }
+        ; { tag = Some 0 (* an element *)
+          ; labels = [ "v"; "prev"; "next"; "header" ]
+          ; interior = 0b0101 (* v, next *)
+          ; payload = 0b0000
+          } ]
+    ; Fixed
+        { labels = [ "key"; "data" ]
+        ; interior = 0b00
+        ; payload = 0b11 (* key, data *)
+        } ]
   (* a user-declared type has no hand-written skeleton: its root block
      is described by the schema the instrumentation derived, so the
      walk starts in schema mode and there are no layers at all *)
   | User -> []
+
+(* Only the hash queue needs one: its elements chain on their own layer
+   while their payload steps down to the next.  [Some]'s field leads to
+   the element layer too, because what the ref holds through the option
+   IS an element. *)
+let interior_targets = function
+  | Core_hash_queue -> [ (2, [ ("0", 2); ("next", 2) ]) ]
+  | Map | Set | Queue | Hashtbl | Stack | Dynarray | Core_map | Core_set
+  | Core_hashtbl | Core_hash_set | Core_queue | Core_stack | Core_deque
+  | Core_fdeque | Core_doubly_linked | User -> []
 
 (* Labels must be ones [layout]'s shapes above actually use, and the
    field they name must be one the payload mask already keeps, so the
@@ -412,3 +456,6 @@ let payload_roles = function
   (* both lists hold elements, and both walk with the same cell layer *)
   | Core_fdeque -> [ []; [ ("0", "elt") ] ]
   | Core_doubly_linked -> [ []; [ ("v", "elt") ] ]
+  (* the pair the elements hold, not the elements themselves *)
+  | Core_hash_queue ->
+    [ []; []; []; [ ("key", "key"); ("data", "data") ] ]
