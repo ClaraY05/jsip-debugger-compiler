@@ -107,19 +107,119 @@ type mutability = Immutable | Mutable
    argument at that position of the argument list, read post-call *)
 type root = Result | Argument of int
 
-(* declaring units of the traversable structures (vreplay/README.md),
-   each with the name the runtime catalogue knows it by and its
-   mutability.  The names MUST mirror [Data_structure.of_module] in
-   vreplay/data_structure.ml; only units the catalogue can walk are
-   listed (Stack waits on its layout, so its events would no-op --
-   markers with no record).  [list]/[array] are predef-typed, not
-   declared in their unit; they need their own rule and are not
-   covered. *)
-let ds_table : (string * (string * mutability)) list =
-  [ "Stdlib__Map", ("Map", Immutable)
-  ; "Stdlib__Set", ("Set", Immutable)
-  ; "Stdlib__Queue", ("Queue", Mutable)
-  ; "Stdlib__Hashtbl", ("Hashtbl", Mutable) ]
+(* The unit a tracked structure's TYPE is declared in, and the catalogue
+   name of the REPRESENTATION that type has -- these names MUST mirror
+   [Data_structure.of_name] in vreplay/data_structure.ml.  This is what
+   names a root, because the module a call went through says nothing
+   about what the call hands back: [Core.Linked_queue] hands back a
+   [Stdlib.Queue.t], and [Queue.pop] on a queue of maps hands back a
+   map.  [Core.Map.t] is an alias of [Base.Map.t] and expands to it, but
+   a Core module whose type stopped being transparent would resolve to
+   its own unit, so both are listed.  [list]/[array] are predef-typed,
+   declared in no unit at all; they would need their own rule and are
+   not covered. *)
+let ds_of_type_unit : (string * string) list =
+  [ "Stdlib__Map", "Map"
+  ; "Stdlib__Set", "Set"
+  ; "Stdlib__Queue", "Queue"
+  ; "Stdlib__Hashtbl", "Hashtbl"
+  ; "Stdlib__Stack", "Stack"
+  ; "Stdlib__Dynarray", "Dynarray"
+  (* Base and Core: BOTH a module's implementation unit and the _intf
+     unit its module type came from, because which one a value's type
+     resolves to is a fact about how the library was assembled, not
+     about the call site -- [Base.Map.t] lands on [Base__Map],
+     [Base.Queue.t] on [Base__Queue_intf].  [Linked_queue] is
+     deliberately absent: its values are stdlib queues and must resolve
+     as such. *)
+  ; "Base__Map", "Core_map"
+  ; "Base__Map_intf", "Core_map"
+  ; "Core__Map", "Core_map"
+  ; "Core__Map_intf", "Core_map"
+  ; "Base__Set", "Core_set"
+  ; "Base__Set_intf", "Core_set"
+  ; "Core__Set", "Core_set"
+  ; "Core__Set_intf", "Core_set"
+  ; "Base__Hashtbl", "Core_hashtbl"
+  ; "Base__Hashtbl_intf", "Core_hashtbl"
+  ; "Core__Hashtbl", "Core_hashtbl"
+  ; "Core__Hashtbl_intf", "Core_hashtbl"
+  ; "Base__Hash_set", "Core_hash_set"
+  ; "Base__Hash_set_intf", "Core_hash_set"
+  ; "Core__Hash_set", "Core_hash_set"
+  ; "Core__Hash_set_intf", "Core_hash_set"
+  ; "Base__Queue", "Core_queue"
+  ; "Base__Queue_intf", "Core_queue"
+  ; "Core__Queue", "Core_queue"
+  ; "Core__Queue_intf", "Core_queue"
+  ; "Base__Stack", "Core_stack"
+  ; "Base__Stack_intf", "Core_stack"
+  ; "Core__Stack", "Core_stack"
+  ; "Core__Stack_intf", "Core_stack"
+  ; "Core__Deque", "Core_deque"
+  ; "Core__Deque_intf", "Core_deque"
+  ; "Core__Fdeque", "Core_fdeque"
+  ; "Core__Fdeque_intf", "Core_fdeque"
+  ; "Core__Fqueue", "Core_fdeque"
+  ; "Core__Doubly_linked", "Core_doubly_linked"
+  ; "Core__Doubly_linked_intf", "Core_doubly_linked" ]
+
+(* The modules whose calls are events: the unit a called function is
+   declared in -- for Base and Core usually the _intf unit its module
+   type came from, not the implementation -- the call's mutability, and
+   the catalogue entries the module OPERATES ON.
+
+   A mutable call re-observes its container arguments, but only those:
+   an argument of some other tracked kind is an element being handed
+   over, which the call cannot have mutated ([Queue.add m q] moves [m]
+   into [q], it does not change [m]).  Naming catalogue ENTRIES rather
+   than units is what lets one shared interface serve several
+   representations -- Base's Queue_intf backs both [Base.Queue], a ring
+   buffer, and [Linked_queue], a stdlib queue.
+
+   [Base__Container_intf] is deliberately absent: the operations every
+   container shares ([length], [iter], [fold]) only read, so nothing
+   they are handed can have changed. *)
+let ds_table : (string * (mutability * string list)) list =
+  [ "Stdlib__Map", (Immutable, [ "Map" ])
+  ; "Stdlib__Set", (Immutable, [ "Set" ])
+  ; "Stdlib__Queue", (Mutable, [ "Queue" ])
+  ; "Stdlib__Hashtbl", (Mutable, [ "Hashtbl" ])
+  ; "Stdlib__Stack", (Mutable, [ "Stack" ])
+  ; "Stdlib__Dynarray", (Mutable, [ "Dynarray" ])
+  ; "Base__Map", (Immutable, [ "Core_map" ])
+  ; "Base__Map_intf", (Immutable, [ "Core_map" ])
+  ; "Core__Map", (Immutable, [ "Core_map" ])
+  ; "Core__Map_intf", (Immutable, [ "Core_map" ])
+  ; "Base__Set", (Immutable, [ "Core_set" ])
+  ; "Base__Set_intf", (Immutable, [ "Core_set" ])
+  ; "Core__Set", (Immutable, [ "Core_set" ])
+  ; "Core__Set_intf", (Immutable, [ "Core_set" ])
+  ; "Base__Hashtbl", (Mutable, [ "Core_hashtbl" ])
+  ; "Base__Hashtbl_intf", (Mutable, [ "Core_hashtbl" ])
+  ; "Core__Hashtbl", (Mutable, [ "Core_hashtbl" ])
+  ; "Core__Hashtbl_intf", (Mutable, [ "Core_hashtbl" ])
+  ; "Base__Hash_set", (Mutable, [ "Core_hash_set" ])
+  ; "Base__Hash_set_intf", (Mutable, [ "Core_hash_set" ])
+  ; "Core__Hash_set", (Mutable, [ "Core_hash_set" ])
+  ; "Core__Hash_set_intf", (Mutable, [ "Core_hash_set" ])
+  ; "Base__Queue", (Mutable, [ "Core_queue"; "Queue" ])
+  ; "Base__Queue_intf", (Mutable, [ "Core_queue"; "Queue" ])
+  ; "Core__Queue", (Mutable, [ "Core_queue"; "Queue" ])
+  ; "Core__Queue_intf", (Mutable, [ "Core_queue"; "Queue" ])
+  ; "Base__Stack", (Mutable, [ "Core_stack" ])
+  ; "Base__Stack_intf", (Mutable, [ "Core_stack" ])
+  ; "Core__Stack", (Mutable, [ "Core_stack" ])
+  ; "Core__Stack_intf", (Mutable, [ "Core_stack" ])
+  ; "Base__Linked_queue", (Mutable, [ "Queue" ])
+  ; "Core__Linked_queue", (Mutable, [ "Queue" ])
+  ; "Core__Deque", (Mutable, [ "Core_deque" ])
+  ; "Core__Deque_intf", (Mutable, [ "Core_deque" ])
+  ; "Core__Fdeque", (Immutable, [ "Core_fdeque" ])
+  ; "Core__Fdeque_intf", (Immutable, [ "Core_fdeque" ])
+  ; "Core__Fqueue", (Immutable, [ "Core_fdeque" ])
+  ; "Core__Doubly_linked", (Mutable, [ "Core_doubly_linked" ])
+  ; "Core__Doubly_linked_intf", (Mutable, [ "Core_doubly_linked" ]) ]
 
 (* declaring unit of a uid. [Subst] copies uids verbatim, so [Item]
    survives [Map.Make], [include], [open] and aliasing.
@@ -130,19 +230,59 @@ let uid_comp_unit : Shape.Uid.t -> string option = function
   | Shape.Uid.Compilation_unit _ | Shape.Uid.Local_opaque_item _
   | Shape.Uid.Internal | Shape.Uid.Predef _ -> None
 
-(* [e]'s head type constructor is declared in [comp_unit] *)
-let is_structure comp_unit (e : Typedtree.expression) =
-  match Types.get_desc (Ctype.expand_head e.exp_env e.exp_type) with
+(* Submodules a container module declares beside its own [t], whose
+   types share its compilation unit and would otherwise be taken for the
+   container itself: a [Doubly_linked.Elt.t] is one element, not a list,
+   and a [Map.Tree.t] is a bare tree with no wrapper record around it --
+   walking either as its parent would mislabel it.  Matched on the
+   module component a type path is reached through, which is the only
+   place a unit-level table can tell them apart. *)
+let aux_type_modules =
+  [ "Elt"; "Tree"; "Key"; "Comparator"; "Hashable"; "Header" ]
+
+(* the unit a type's head constructor is declared in, unless the type is
+   one of those auxiliary ones *)
+let type_unit env ty =
+  match Types.get_desc ty with
   | Types.Tconstr (path, _, _) ->
-    begin match Env.find_type path e.exp_env with
-    | decl ->
-      begin match uid_comp_unit decl.type_uid with
-      | Some declaring_unit -> String.equal declaring_unit comp_unit
-      | None -> false
+    begin match path with
+    | Path.Pdot (Path.Pdot (_, m), _) when List.mem m aux_type_modules ->
+      None
+    | Path.Pdot _ | Path.Pident _ | Path.Papply _ | Path.Pextra_ty _ ->
+      begin match Env.find_type path env with
+      | decl -> uid_comp_unit decl.type_uid
+      | exception Not_found -> None
       end
-    | exception Not_found -> false
     end
-  | _ -> false
+  | _ -> None
+
+(* The units [e]'s type could be catalogued under, most specific first:
+   the type AS WRITTEN, then what it expands to.  Both are needed, and
+   for opposite reasons: a transparent alias of another library's type
+   ([Core.Map.t] = [Base.Map.t]) is only recognisable once expanded,
+   while an alias to something the catalogue must NOT claim
+   ([Doubly_linked.t] is an [Elt.t option ref], and a ref is nobody's
+   data structure) is only recognisable before.  Whether a library hides
+   a type behind its .mli then stops mattering. *)
+let type_units (e : Typedtree.expression) =
+  let as_written = type_unit e.exp_env e.exp_type in
+  let expanded =
+    type_unit e.exp_env (Ctype.expand_head e.exp_env e.exp_type)
+  in
+  match as_written, expanded with
+  | Some a, Some b when String.equal a b -> [ a ]
+  | Some a, Some b -> [ a; b ]
+  | Some a, None | None, Some a -> [ a ]
+  | None, None -> []
+
+(* the catalogue entry [e]'s type is walked as, by the first of its
+   units the catalogue knows.  [None] for anything else: a type from an
+   unknown unit, a predefined type, a functor parameter, a function
+   type. *)
+let structure_ds (e : Typedtree.expression) =
+  List.find_map
+    (fun unit -> List.assoc_opt unit ds_of_type_unit)
+    (type_units e)
 
 (* partial application: the call leaves an arrow *)
 let is_partial (e : Typedtree.expression) =
@@ -150,22 +290,23 @@ let is_partial (e : Typedtree.expression) =
   | Types.Tarrow _ -> true
   | _ -> false
 
-(* a mutable call's argument roots: every structure-typed argument that
-   is a plain ident, in argument order -- only an ident is safe to
-   re-read post-call.  A structure argument that is a bigger expression
-   is skipped, not fatal (its value's own events cover it).  Deduped by
-   path, first occurrence kept, so an argument passed twice is observed
-   once. *)
-let argument_roots comp_unit args =
+(* a mutable call's argument roots, each with its own catalogue name:
+   every argument that is a plain ident holding one of the containers
+   this module operates on, in argument order -- only an ident is safe
+   to re-read post-call.  A container argument that is a bigger
+   expression is skipped, not fatal (its value's own events cover it).
+   Deduped by path, first occurrence kept, so an argument passed twice
+   is observed once. *)
+let argument_roots operates args =
   let rec collect i seen = function
     | [] -> []
     | (_, Typedtree.Omitted ()) :: rest -> collect (i + 1) seen rest
     | (_, Typedtree.Arg (a : Typedtree.expression)) :: rest ->
-      begin match a.exp_desc with
-      | Texp_ident (path, _, _)
-        when is_structure comp_unit a
+      begin match a.exp_desc, structure_ds a with
+      | Texp_ident (path, _, _), Some ds
+        when List.mem ds operates
              && not (List.exists (Path.same path) seen) ->
-        Argument i :: collect (i + 1) (path :: seen) rest
+        (Argument i, ds) :: collect (i + 1) (path :: seen) rest
       | _ -> collect (i + 1) seen rest
       end
   in
@@ -179,29 +320,33 @@ let argument_roots comp_unit args =
    too, since types cannot tell [iter] from [remove] -- and the result
    as well when it is itself a structure ([create], [copy], [pop] on a
    container of containers).  Containers first, result last, one record
-   each inside the call's single frame. *)
+   each inside the call's single frame; each root is walked as the
+   catalogue entry ITS OWN type resolves to, which is how popping a map
+   off a queue of maps is observed as a map.  No roots: not an event. *)
 let classify (exp : Typedtree.expression)
-      (func : Typedtree.expression) args : (string * root list) option =
+      (func : Typedtree.expression) args : (root * string) list =
   match func.exp_desc with
   | Texp_ident (_, _, vd) ->
     begin match uid_comp_unit vd.val_uid with
-    | None -> None
+    | None -> []
     | Some comp_unit ->
       begin match List.assoc_opt comp_unit ds_table with
-      | None -> None
-      | Some (ds, Immutable) ->
-        if is_structure comp_unit exp then Some (ds, [ Result ]) else None
-      | Some (ds, Mutable) ->
-        if is_partial exp then None
-        else begin
-          let result = if is_structure comp_unit exp then [ Result ] else [] in
-          match argument_roots comp_unit args @ result with
-          | [] -> None
-          | roots -> Some (ds, roots)
+      | None -> []
+      | Some (mutability, operates) ->
+        let result =
+          match structure_ds exp with
+          | Some ds -> [ Result, ds ]
+          | None -> []
+        in
+        begin match mutability with
+        | Immutable -> result
+        | Mutable ->
+          if is_partial exp then []
+          else argument_roots operates args @ result
         end
       end
     end
-  | _ -> None
+  | _ -> []
 
 (* ---- the static type each root carries ---- *)
 
@@ -686,8 +831,8 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
     match exp.exp_desc with
     | Texp_apply (func, args) ->
       begin match classify exp func args with
-      | None -> recurse_down
-      | Some (ds, roots) ->
+      | [] -> recurse_down
+      | roots ->
         let wire = Wire.format_function_call exp func args in
         let result_name =
           match !current_binder with
@@ -696,7 +841,7 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
         in
         let hooks =
           List.map
-            (fun root ->
+            (fun (root, ds) ->
                let name =
                  match root with
                  | Result -> result_name

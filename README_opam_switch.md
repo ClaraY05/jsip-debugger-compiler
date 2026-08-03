@@ -84,13 +84,39 @@ Expectations, so nobody debugs a non-bug:
 
 - The program compiles, links and **runs correctly** — that is the point
   of the switch (CMI magic `Caml1999I037` end to end).
-- Its **dump is empty**: the instrumentation classifies calls by declaring
-  unit (`Stdlib__Map`/`Set`/`Queue`/`Hashtbl`), and the walker only knows
-  stdlib layouts. Core's `Map`/`Hashtbl` live in `Base__*` units with
-  different representations — support for them is future work (ds_table +
-  `Data_structure` catalogue + per-tag walker layouts).
+- Its dump carries Core's structures: `Core_map`, `Core_set`,
+  `Core_hashtbl`, `Core_hash_set`, `Core_queue`, `Core_stack`,
+  `Core_deque`, `Core_fdeque`, `Core_doubly_linked`, and plain `Queue`
+  for `Linked_queue` (which is a `Stdlib.Queue.t`). See
+  `vreplay/README.md` for the catalogue.
 - Stdlib-structure programs compiled in this switch produce full dumps
   (see Verify above), including under dune.
+
+### Checking the catalogue against a real Core
+
+The golden tests (`testing/run_tests.sh`) cover Base and Core through
+stand-in units in `testing/mock/`, which is what lets CI run them with no
+switch at all. They cannot catch a representation that has MOVED — for
+that, run something like the above against the installed library and read
+the dump. Two things that bit us, both invisible to the mocks:
+
+- Base and Core export most container functions through their `_intf`
+  units, so the declaring unit of `Hashtbl.set` is `Base__Hashtbl_intf`,
+  not `Base__Hashtbl`; the same goes for the types. Both spellings are in
+  the tables.
+- Field counts drift between versions (`Core.Deque` grew a
+  `never_shrink`; Base v0.18 drops `Map`'s root `length` and reshapes its
+  nodes). A layer accepts several shapes for exactly this reason, and a
+  block matching none is dumped as plain payload rather than mislabelled
+  — so a drifted structure looks flat and unlabelled in the interface
+  instead of disappearing.
+
+A compiler built from this repo can be pointed at the switch's libraries
+without reinstalling it, which makes that loop minutes rather than an
+hour: build in-tree, then drive `ocamlc` with `-nostdlib -I
+$(opam var --switch=jsip-vreplay lib)/ocaml` plus this tree's `vreplay/`
+and `-use-runtime` (`ocamlfind` obeys `OCAMLFIND_COMMANDS=ocamlc=...`,
+and `CAML_LD_LIBRARY_PATH` must point at the switch's `stublibs`).
 
 ## Caveats
 
