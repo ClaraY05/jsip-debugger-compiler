@@ -129,6 +129,7 @@ type block =
   | Id of int
 
 type node = {
+  id : int;
   virtual_address : nativeint;
   block : (string * block) list;
   children : node list;
@@ -192,25 +193,24 @@ let entry_from_sexp = function
   | List [ Atom lbl; b ] -> (lbl, block_from_sexp b)
   | _ -> failwith "Sexp.from_sexp: bad block entry"
 
-(* [seen] guards against a heap cycle surviving the walker's sharing dedup
-   (two parents, one node value here): a revisited node is emitted with its
-   data but no children, so the printer terminates and a reader can rejoin
-   it by address. *)
-let rec sexp_of_node seen n =
-  let revisit = List.memq n !seen in
-  if not revisit then seen := n :: !seen;
-  let kids = if revisit then [] else n.children in
+(* The walker returns a strict tree -- a block revisited within a walk
+   becomes an [Id] back-reference, never a second parent -- so the
+   printer needs no cycle guard. *)
+let rec sexp_of_node n =
   List
-    [ List [ Atom "virtual_address"; Atom (hex n.virtual_address) ]
+    [ List [ Atom "id"; Atom (string_of_int n.id) ]
+    ; List [ Atom "virtual_address"; Atom (hex n.virtual_address) ]
     ; List [ Atom "block"; List (List.map sexp_of_entry n.block) ]
-    ; List [ Atom "children"; List (List.map (sexp_of_node seen) kids) ] ]
+    ; List [ Atom "children"; List (List.map sexp_of_node n.children) ] ]
 
 let rec node_from_sexp = function
   | List
-      [ List [ Atom "virtual_address"; Atom a ]
+      [ List [ Atom "id"; Atom i ]
+      ; List [ Atom "virtual_address"; Atom a ]
       ; List [ Atom "block"; List entries ]
       ; List [ Atom "children"; List kids ] ] ->
-    { virtual_address = Nativeint.of_string a
+    { id = int_of_string i
+    ; virtual_address = Nativeint.of_string a
     ; block = List.map entry_from_sexp entries
     ; children = List.map node_from_sexp kids }
   | _ -> failwith "Sexp.from_sexp: bad node"
@@ -280,7 +280,7 @@ let sexp_of_args args =
 let to_sexp { ds_type; root_node } =
   List
     [ List [ Atom "ds_type"; Atom (Data_structure.to_string ds_type) ]
-    ; List [ Atom "root_node"; sexp_of_node (ref []) root_node ] ]
+    ; List [ Atom "root_node"; sexp_of_node root_node ] ]
 
 let from_sexp = function
   | List

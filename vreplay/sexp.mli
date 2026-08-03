@@ -40,11 +40,12 @@ val of_string : string -> t
 
    Tuples, records and non-constant constructors are zero-tagged
    (scannable) blocks: within the data structure they are walked and
-   appear as child [node]s; at a tracked boundary they appear as [Id] --
-   the registry id of the tracked structure, which this event's registry
-   maps to its current address (index by the int; the registry is the
-   single source of memory locations).  [Address] carries only a block
-   we do not decode (Abstract_tag, an unknown Custom_tag). *)
+   appear as child [node]s -- unless the dump already defines them, in
+   which case they appear as [Id n]: a reference to the unique node
+   carrying [(id n)], dumped by an earlier event (a tracked root, a
+   remembered member of an immutable structure) or earlier in this same
+   walk (sharing, a cycle).  [Address] carries only a block we do not
+   decode (Abstract_tag, an unknown Custom_tag). *)
 type block =
   | Int of int
   | Float of float
@@ -57,6 +58,7 @@ type block =
   | Id of int
 
 type node = {
+  id : int;                         (* wire id, unique across the dump *)
   virtual_address : nativeint;      (* the block's address at snapshot time *)
   block : (string * block) list;    (* labeled meaningful data fields *)
   children : node list;             (* masked fields that are DS-internal *)
@@ -65,7 +67,20 @@ type node = {
 (* Both lists preserve field order, and [block] holds every masked
    non-child field -- so a masked field absent from [block] was a child,
    and the k-th such absence is [children]'s k-th node.  That is how a
-   reader recovers which side (l/r) a child hung off. *)
+   reader recovers which side (l/r) a child hung off.  ([Id] fields sit
+   in [block] like any other leaf, so the rule is unaffected by
+   sharing.)
+
+   Dumps are DELTAS.  For immutable structures (Map/Set) a block is
+   dumped -- given a node with a fresh [(id n)] -- at most once in the
+   whole dump; every later occurrence is an [Id n] reference, and a
+   re-observed structure's whole event collapses to a REVISIT STUB: its
+   root's id again, the current address, empty [block] and [children].
+   Mutable structures (Queue/Hashtbl) re-walk in full at every event:
+   the root keeps its registry id across these re-dumps while interior
+   cells take fresh ids each time.  A reader reconstructs any event by
+   resolving [Id n] against the node that defined [(id n)] earlier in
+   the dump. *)
 
 (* What one event passes to the other program: the DS type stated once,
    plus the walked shape. *)
@@ -78,7 +93,7 @@ type snapshot = {
    definitions above, e.g.
 
      ((ds_type Map)
-      (root_node ((virtual_address 0x7f...)
+      (root_node ((id 3) (virtual_address 0x7f...)
                   (block ((l (Int 0)) (v (Int 1)) (d (Float 3.14))))
                   (children ()))))
 
@@ -90,8 +105,9 @@ val from_sexp : t -> snapshot
 
 (* The live weak registry at event time as (id, current address, name)
    triples -- the event wrapper carries it beside the snapshot, and it is
-   the single source of memory locations for tracked structures: an
-   [Id i] inside the snapshot is resolved by indexing this registry.  Ids
+   the single source of CURRENT memory locations for tracked structures
+   (any [Id i] also resolves against the node that carried [(id i)]
+   earlier in the dump).  Ids
    are stable across events; addresses are captured by the same C walk as
    the nodes.  The name is the latest non-empty identifier the structure
    was observed under (a later event may rename it); a named entry

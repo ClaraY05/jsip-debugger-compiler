@@ -11,10 +11,14 @@ root (so `loc` strings stay relative and stable), run, and checked two
 ways:
 
 1. **`check_dump`** validates the dump's structure: every line is a
-   `{`/`}` marker run plus at most one sexp, every event has the six
-   wrapper fields (`id loc fn args registry snapshot`), every snapshot
-   round-trips exactly through `Vreplay.from_sexp`/`to_sexp`, and depth
-   returns to 0 at EOF.
+   `{`/`}` marker run plus at most one sexp, every event has the seven
+   wrapper fields (`id loc fn args registry ty snapshot`), every
+   snapshot round-trips exactly through `Vreplay.from_sexp`/`to_sexp`,
+   depth returns to 0 at EOF, and the sharing invariants hold: node
+   ids never repeat (except as an event's root — for an immutable DS
+   only as a revisit stub), every `(Id n)` resolves to an
+   already-defined node, registry ids are dumped node ids, and
+   addresses are unique within an event.
 2. **Golden diff** against `expected/<name>.dump`.  The expected files
    are **verbatim dumps of a real run** -- byte-for-byte what the
    interface's reader will be fed, usable directly as parser fixtures.
@@ -37,7 +41,13 @@ whole, closures as opaque addresses), multi-root calls (`transfer`,
 containers of containers -- several records inside one frame), the
 dump sink (program stdout kept separate; a `VREPLAY_SOCK` listener),
 the weak registry dropping GC'd structures,
-tracked-structure-inside-tracked-structure `(Id _)` boundaries, and
+tracked-structure-inside-tracked-structure `(Id _)` boundaries,
+structure sharing (`map_versions`: version chains dump only the
+rebuilt path, and shared blocks keep their ids after their owning
+version is collected; `map_shared_payload`: one record under several
+keys stays one definition; `map_rewalk`: a re-observed map collapses
+to a revisit stub; `queue_cycle`: a payload cycle becomes an `(Id _)`
+back-reference), and
 negatives (plain functions, partial application, Stack/list/array
 which are deliberately uncovered today).
 

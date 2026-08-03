@@ -28,6 +28,7 @@ type block = Sexp.block =
   | Id of int
 
 type node = Sexp.node = {
+  id : int;
   virtual_address : nativeint;
   block : (string * block) list;
   children : node list;
@@ -45,13 +46,24 @@ let from_sexp = Sexp.from_sexp
    (id, address, name) triples -- the registry component of the event.
    Both come from the same no-allocation capture, so the registry's
    addresses match the addresses the nodes record; the names ride along
-   verbatim ("" = anonymous).  The third argument is the DS's layout, one
+   verbatim ("" = anonymous).
+
+   [members] is the pointer->wire-id table of every block some earlier
+   event already defined: the remembered members of immutable
+   structures plus the live registry roots.  The walked root itself is
+   in it exactly when its re-observation should collapse to a revisit
+   stub (see [live_members]).  The int pair is (the root's id, the
+   first id for newly discovered cells); the result's third component
+   is each new cell's discovery edge -- (parent cell index, raw field
+   index), in discovery order -- which [absorb_members] uses to
+   re-reach the new blocks.  The last argument is the DS's layout, one
    flattened [Data_structure.layer] per entry:
    (labels, interior mask, payload mask, is_array). *)
 external traverse :
-  Obj.t -> (Obj.t * int * string) array
+  Obj.t -> (Obj.t * int * string) array -> (Obj.t * int) array
+  -> int * int
   -> (string array * int * int * bool) array
-  -> node * (int * nativeint * string) array
+  -> node * (int * nativeint * string) array * (int * int) array
   = "caml_wire_traverse"
 
 let flatten_layer : Data_structure.layer -> string array * int * int * bool
@@ -65,16 +77,30 @@ let flatten_layer : Data_structure.layer -> string array * int * int * bool
    and markers ordered (REVIEW_FINDINGS.md #2). *)
 external emit : string -> unit = "caml_wire_emit"
 
-(* ---- identity: opaque stable ids ---- *)
+(* ---- identity: opaque stable ids ----
+   One counter numbers everything on the wire: registry entries (a
+   structure's id is its root's) and every interior cell a walk dumps.
+   The C walker assigns the cell ids itself -- sequentially from
+   [next_int] -- and [advance] consumes them afterwards, so no id is
+   ever issued twice. *)
 module Id : sig
   type t
   val fresh : unit -> t
   val to_int : t -> int
+  val of_int : int -> t
+  val next_int : unit -> int
+  val advance : int -> unit
 end = struct
   type t = int
   let next = ref 0
   let fresh () = incr next; !next
   let to_int id = id
+  (* re-adopt an id the walker already put on the wire *)
+  let of_int n = n
+  (* the id the next [fresh] would return *)
+  let next_int () = !next + 1
+  (* consume the [k] ids the walker just assigned *)
+  let advance k = next := !next + k
 end
 
 (* ---- registry: one growable array of weakly-held entries.  Identity is
@@ -112,19 +138,59 @@ let find_entry (o : Obj.t) : entry option =
   in
   go 0
 
+(* ---- member store: what earlier events already dumped ----
+   One chunk per first walk of an immutable structure: that walk's
+   newly discovered cells (beyond the root, which the registry tracks)
+   held weakly, paired with the wire ids the walker assigned.  Chunks
+   OUTLIVE registry entries: a dead version's blocks usually live on
+   inside later versions, so a chunk is dropped only once every slot
+   has been collected (see [live_members]).  The weak slots also make
+   staleness impossible: a collected member simply vanishes from the
+   next table, so an address the GC recycled can never resurface under
+   an old id. *)
+type chunk = { values : Obj.t Weak.t; ids : int array }
+
+let chunks : chunk Dynarray.t = Dynarray.create ()
+
+(* The wire id [o] already carries, if some earlier event dumped it as
+   an interior member.  Physical scan, like [find_entry]. *)
+let find_member_id (o : Obj.t) : int option =
+  let found = ref None in
+  Dynarray.iter
+    (fun ch ->
+      for i = 0 to Weak.length ch.values - 1 do
+        if !found = None then
+          match Weak.get ch.values i with
+          | Some v when v == o -> found := Some ch.ids.(i)
+          | _ -> ()
+      done)
+    chunks;
+  !found
+
 (* Track [o] under [name].  Latest non-empty name wins: re-observing a
    structure under a new identifier renames its entry, so the registry
    shows what the code currently calls it; an empty name never erases a
-   known one. *)
-let register (o : Obj.t) ~name : Id.t =
+   known one.  Also says whether this observation is [o]'s FIRST dump
+   (walk in full) or a re-observation (an immutable root collapses to
+   a revisit stub).  A block first dumped as an interior member --
+   e.g. [remove] returning an existing subtree as the new version --
+   keeps its wire id when it becomes a tracked root: identity belongs
+   to the block, and its one definition is already on the wire. *)
+let register (o : Obj.t) ~name : Id.t * bool =
   match find_entry o with
   | Some e ->
     if not (String.equal name "") then e.name <- name;
-    e.id
+    (e.id, false)
   | None ->
-    let id = Id.fresh () in
-    Dynarray.add_last registry { id; name; values = weak_of o };
-    id
+    (match find_member_id o with
+     | Some n ->
+       let id = Id.of_int n in
+       Dynarray.add_last registry { id; name; values = weak_of o };
+       (id, false)
+     | None ->
+       let id = Id.fresh () in
+       Dynarray.add_last registry { id; name; values = weak_of o };
+       (id, true))
 
 (* Snapshot of the currently-live tracked objects as (value, id, name)
    triples, in registry (insertion) order; also compacts the registry,
@@ -134,7 +200,7 @@ let live_known () =
   let live = Dynarray.create () in
   let trips = ref [] in
   Dynarray.iter
-    (fun e ->
+    (fun (e : entry) ->
       match Weak.get e.values 0 with
       | Some o ->
         Dynarray.add_last live e;
@@ -146,6 +212,57 @@ let live_known () =
     Dynarray.append registry live
   end;
   Array.of_list (List.rev !trips)
+
+(* The member table for one event: every live remembered member plus
+   every live registry root except [root] itself, which is appended
+   only when [include_root] -- an immutable structure observed again,
+   which the walker then collapses to a revisit stub.  (Leaving the
+   root out otherwise is what lets a fresh walk, and every mutable
+   re-walk, actually walk.)  Also compacts [chunks], dropping the
+   fully-dead ones.  Order is irrelevant: the C side sorts. *)
+let live_members ~known ~root ~include_root ~root_id =
+  let out = ref [] in
+  let keep = Dynarray.create () in
+  Dynarray.iter
+    (fun ch ->
+      let alive = ref false in
+      for i = 0 to Weak.length ch.values - 1 do
+        match Weak.get ch.values i with
+        | Some v ->
+          alive := true;
+          out := (v, ch.ids.(i)) :: !out
+        | None -> ()
+      done;
+      if !alive then Dynarray.add_last keep ch)
+    chunks;
+  if Dynarray.length keep < Dynarray.length chunks then begin
+    Dynarray.clear chunks;
+    Dynarray.append chunks keep
+  end;
+  Array.iter
+    (fun (o, id, _name) -> if o != root then out := (o, id) :: !out)
+    known;
+  if include_root then out := (root, root_id) :: !out;
+  Array.of_list !out
+
+(* Remember a first walk's new cells: re-reach each one through its
+   discovery edge (cell 0 is [root]; [paths.(j)] locates cell [j + 1]
+   as a raw field of an earlier cell -- coordinates stay valid where
+   raw addresses would have been moved by the walk's own allocation)
+   and store them weakly with their sequential ids. *)
+let absorb_members ~root ~paths ~first_id =
+  let k = Array.length paths in
+  if k > 0 then begin
+    let cells = Array.make (k + 1) root in
+    Array.iteri
+      (fun j (parent, field) ->
+        cells.(j + 1) <- Obj.field cells.(parent) field)
+      paths;
+    let values = Weak.create k in
+    for j = 0 to k - 1 do Weak.set values j (Some cells.(j + 1)) done;
+    Dynarray.add_last chunks
+      { values; ids = Array.init k (fun j -> first_id + j) }
+  end
 
 (* One event, one line: call metadata, the live registry, the root's
    static type, then the [to_sexp] payload.  The {} depth markers around
@@ -176,8 +293,24 @@ let snapshot ~loc ~fn ~ds ~args ~name ~ty root =
       let layers =
         Array.of_list (List.map flatten_layer (Data_structure.layout ds_ty))
       in
-      let id = register r ~name in
-      let root_node, registry = traverse r (live_known ()) layers in
-      emit_event ~loc ~fn ~args ~id:(Id.to_int id) ~registry ~ty
+      let immutable = Data_structure.is_immutable ds_ty in
+      let id, fresh = register r ~name in
+      let root_id = Id.to_int id in
+      let known = live_known () in
+      let members =
+        live_members ~known ~root:r
+          ~include_root:(immutable && not fresh) ~root_id
+      in
+      let next_id = Id.next_int () in
+      let root_node, registry, paths =
+        traverse r known members (root_id, next_id) layers
+      in
+      (* the walker consumed one id per newly dumped cell *)
+      Id.advance (Array.length paths);
+      (* mutable structures are re-walked in full every event, so their
+         cells' ids are never remembered *)
+      if immutable && fresh then
+        absorb_members ~root:r ~paths ~first_id:next_id;
+      emit_event ~loc ~fn ~args ~id:root_id ~registry ~ty
         { ds_type = ds_ty; root_node }
     end

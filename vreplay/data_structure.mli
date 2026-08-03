@@ -10,6 +10,12 @@ val to_string : t -> string
    (e.g. "Map") -> the catalogue entry. *)
 val of_module : string -> t option
 
+(* Whether values of this DS never change after creation.  Immutable
+   structures' dumped blocks are remembered (weakly) by the runtime so
+   later events stop at them with [Id] references and dump only what is
+   new; mutable ones are re-walked in full at every event. *)
+val is_immutable : t -> bool
+
 (* One layer of a DS's internal representation.  The walker tells a
    structure's own skeleton apart from the user data it holds by the
    EDGE it reached a block through, never by the block's shape:

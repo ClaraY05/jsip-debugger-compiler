@@ -25,24 +25,39 @@
  *     | Int of int | Float of float | String of string
  *     | Int32 of int32 | Int64 of int64 | Nativeint of nativeint
  *     | Float_array of float list | Address of nativeint | Id of int
- *   type node  = { virtual_address : nativeint
+ *   type node  = { id : int; virtual_address : nativeint
  *                ; block : (string * block) list; children : node list }
  *   external traverse :
- *     Obj.t -> (Obj.t * int * string) array
+ *     Obj.t -> (Obj.t * int * string) array -> (Obj.t * int) array
+ *     -> int * int
  *     -> (string array * int * int * bool) array
- *     -> node * (int * nativeint * string) array
+ *     -> node * (int * nativeint * string) array * (int * int) array
  *     = "caml_wire_traverse"
  * The DS type itself stays on the OCaml side ([Vreplay.t] pairs it with
  * the root node once); the walker doesn't need it.  The second component
  * of the result echoes [known] -- the live weak registry -- as
  * (id, address, name) triples captured before any allocation, so the
- * addresses are exactly the ones the nodes record: an (Id i) boundary in
- * the snapshot is resolved by indexing this event's registry.  The name
- * ("" = anonymous) rides along verbatim: strdup'd in the same
- * no-allocation window, echoed back with its entry.
+ * addresses are exactly the ones the nodes record.  The name ("" =
+ * anonymous) rides along verbatim: strdup'd in the same no-allocation
+ * window, echoed back with its entry.
  *
- * Given a [root] to walk, [known] (every currently-tracked object paired
- * with its stable id, from the weak registry), and the DS's [layers]
+ * Every dumped block carries a wire id, unique across the whole dump:
+ * the root's is the fourth argument's first component (its registry
+ * id), and each newly discovered cell takes the next sequential id
+ * starting at the second component ([next_id]).  The third argument is
+ * the MEMBER TABLE -- every block an earlier event already defined, as
+ * (value, id) pairs (the OCaml side seeds it with the remembered
+ * members of immutable structures plus the live registry roots).  A
+ * field that hits the table becomes [Id] and the walk stops there; a
+ * root that hits it collapses to a REVISIT STUB (same id, current
+ * address, empty block and children).  So each block is defined at
+ * most once, ever, and (Id n) means "the block defined as id n".  The
+ * result's third component gives each new cell's discovery edge as a
+ * (parent cell index, raw field index) pair, letting the OCaml side
+ * re-reach the new blocks through Obj.field and remember them weakly
+ * for later events' member tables.
+ *
+ * Given a [root] to walk, the tables above, and the DS's [layers]
  * (one flattened Data_structure.layer per entry: labels, interior mask,
  * payload mask, is_array -- see data_structure.mli), we BFS the
  * in-memory representation reachable from [root] and return it as a
@@ -64,10 +79,10 @@
  * A kept field becomes, per the rule:
  *
  *   - not a block            -> Int (unboxed int/char/bool/constant ctor)
- *   - block, in [known]      -> Id (its registry id), STOP -- it is
- *                               walked at its own events, and the
- *                               event's registry maps the id to the
- *                               structure's current address
+ *   - block, in the member
+ *     table                  -> Id (its wire id), STOP -- some earlier
+ *                               event (or this event's registry) already
+ *                               defines that block
  *   - block, not walkable    -> a leaf, decoded per the manual's
  *     (see [Walkable_tag])      "Representation of OCaml data types":
  *                               Double_tag -> Float, String_tag -> String,
@@ -85,9 +100,9 @@
  * the walk and the raw [value]s cached in [seen] stay valid.  Everything
  * the walk records is plain C data (addresses, decoded leaves, label
  * copies).  Only afterwards do we build the OCaml nodes, and that build
- * holds no walked [value]s, so it cannot dangle anything.  A shared block
- * is discovered once (one node, several parents); the OCaml printer copes
- * with the resulting DAG.
+ * holds no walked [value]s, so it cannot dangle anything.  A block
+ * revisited WITHIN the walk (sharing or a cycle) is emitted as an [Id]
+ * back-reference, never a second parent: the node tree is strict.
  * ------------------------------------------------------------------ */
 
 /* Blocks the BFS may enter: regular tuple/record/variant blocks (tags
@@ -177,20 +192,28 @@ static void itab_put(itab *t, uintnat p, long idx)
     t->idxs[s] = idx;
 }
 
-/* ---- pointer -> stable id lookup, built once from [known].  [name] is
+/* ---- the registry echo entries, captured from [known].  [name] is
  * strdup'd at capture ("" = anonymous); the registry-order copy [reg]
- * owns every name -- the sorted [known] aliases the same pointers, so
- * names are freed exactly once, via [registry_free]. ---- */
+ * owns every name, freed via [registry_free].  [known] is echo-only:
+ * boundary detection goes through the member table below, which the
+ * OCaml side seeds with the live registry roots too. ---- */
 typedef struct { uintnat ptr; long id; char *name; } known_ent;
 
-static int known_cmp(const void *a, const void *b)
+/* ---- pointer -> wire id: every block already defined by an earlier
+ * event (an immutable structure's remembered members plus the live
+ * registry roots), sorted by address once per call.  A field that hits
+ * this table is emitted as [Id] and the walk stops there: the dump
+ * defines each block at most once, ever. ---- */
+typedef struct { uintnat ptr; long id; } mem_ent;
+
+static int mem_cmp(const void *a, const void *b)
 {
-    uintnat pa = ((const known_ent *)a)->ptr, pb = ((const known_ent *)b)->ptr;
+    uintnat pa = ((const mem_ent *)a)->ptr, pb = ((const mem_ent *)b)->ptr;
     return (pa < pb) ? -1 : (pa > pb) ? 1 : 0;
 }
 
 /* Binary search the sorted [arr]; return the id for pointer [p], or -1. */
-static long known_lookup(const known_ent *arr, size_t n, uintnat p)
+static long mem_lookup(const mem_ent *arr, size_t n, uintnat p)
 {
     size_t lo = 0, hi = n;
     while (lo < hi) {
@@ -418,35 +441,41 @@ static value alloc_block(const cfield *fl)
 }
 
 /* external traverse :
- *   Obj.t -> (Obj.t * int * string) array
+ *   Obj.t -> (Obj.t * int * string) array -> (Obj.t * int) array
+ *   -> int * int
  *   -> (string array * int * int * bool) array
- *   -> node * (int * nativeint * string) array
+ *   -> node * (int * nativeint * string) array * (int * int) array
  *   = "caml_wire_traverse" */
 CAMLprim value caml_wire_traverse(value v_root, value v_known,
+                                  value v_members, value v_ids,
                                   value v_layers)
 {
-    CAMLparam3(v_root, v_known, v_layers);
+    CAMLparam5(v_root, v_known, v_members, v_ids, v_layers);
     CAMLlocal5(nodes, nodev, lst, ent, bx);
-    CAMLlocal3(cons, regarr, resv);
+    CAMLlocal5(cons, regarr, resv, pathsarr, pairv);
 
-    /* Build the sorted pointer->id table from [known].  Reads raw
-     * pointers of the known objects and strdups their names; no OCaml
-     * allocation, so neither can move.  [reg] keeps an unsorted copy in
-     * registry order for the registry echo (and owns the names -- see
-     * registry_free). */
+    long root_id = (long)Long_val(Field(v_ids, 0));
+    long next_id = (long)Long_val(Field(v_ids, 1));
+
+    /* Capture the registry echo from [known] and build the sorted
+     * pointer->id member table from [v_members].  Reads raw pointers
+     * and strdups names; no OCaml allocation, so nothing can move. */
     mlsize_t nk = Is_block(v_known) ? Wosize_val(v_known) : 0;
-    known_ent *known = nk ? malloc(sizeof(known_ent) * nk) : NULL;
     known_ent *reg = nk ? malloc(sizeof(known_ent) * nk) : NULL;
     for (mlsize_t k = 0; k < nk; k++) {
         value trip = Field(v_known, k);
-        known[k].ptr  = (uintnat)Field(trip, 0);
-        known[k].id   = (long)Long_val(Field(trip, 1));
-        known[k].name = strdup(String_val(Field(trip, 2)));
+        reg[k].ptr  = (uintnat)Field(trip, 0);
+        reg[k].id   = (long)Long_val(Field(trip, 1));
+        reg[k].name = strdup(String_val(Field(trip, 2)));
     }
-    if (nk) {
-        memcpy(reg, known, sizeof(known_ent) * nk);
-        qsort(known, nk, sizeof(known_ent), known_cmp);
+    mlsize_t nm = Is_block(v_members) ? Wosize_val(v_members) : 0;
+    mem_ent *members = nm ? malloc(sizeof(mem_ent) * nm) : NULL;
+    for (mlsize_t k = 0; k < nm; k++) {
+        value pair = Field(v_members, k);
+        members[k].ptr = (uintnat)Field(pair, 0);
+        members[k].id  = (long)Long_val(Field(pair, 1));
     }
+    if (nm) qsort(members, nm, sizeof(mem_ent), mem_cmp);
 
     /* An immediate root has no heap cell to walk.  Not reachable from
      * vreplay.ml (it skips immediates); return a lone leaf node anyway
@@ -461,15 +490,41 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
         cons = caml_alloc(2, 0);
         Store_field(cons, 0, ent);
         Store_field(cons, 1, Val_emptylist);
-        nodev = caml_alloc(3, 0);
-        Store_field(nodev, 0, caml_copy_nativeint(0));
-        Store_field(nodev, 1, cons);
-        Store_field(nodev, 2, Val_emptylist);
+        nodev = caml_alloc(4, 0);
+        Store_field(nodev, 0, Val_long(root_id));
+        Store_field(nodev, 1, caml_copy_nativeint(0));
+        Store_field(nodev, 2, cons);
+        Store_field(nodev, 3, Val_emptylist);
         regarr = alloc_registry(reg, nk);
-        resv = caml_alloc(2, 0);
+        resv = caml_alloc(3, 0);
         Store_field(resv, 0, nodev);
         Store_field(resv, 1, regarr);
-        free(known);
+        Store_field(resv, 2, Atom(0));
+        free(members);
+        registry_free(reg, nk);
+        CAMLreturn(resv);
+    }
+
+    /* A root already in the member table was dumped in full at an
+     * earlier event: emit a REVISIT STUB -- same id, current address,
+     * empty block and children -- instead of walking anything.  The
+     * OCaml side includes the root in [v_members] exactly when it
+     * wants this collapse (an immutable structure observed again);
+     * mutable structures are left out and re-walk in full. */
+    long stub_id = mem_lookup(members, nm, (uintnat)v_root);
+    if (stub_id >= 0) {
+        uintnat raddr = (uintnat)v_root;   /* before any allocation */
+        nodev = caml_alloc(4, 0);
+        Store_field(nodev, 0, Val_long(stub_id));
+        Store_field(nodev, 1, caml_copy_nativeint((intnat)raddr));
+        Store_field(nodev, 2, Val_emptylist);
+        Store_field(nodev, 3, Val_emptylist);
+        regarr = alloc_registry(reg, nk);
+        resv = caml_alloc(3, 0);
+        Store_field(resv, 0, nodev);
+        Store_field(resv, 1, regarr);
+        Store_field(resv, 2, Atom(0));
+        free(members);
         registry_free(reg, nk);
         CAMLreturn(resv);
     }
@@ -483,9 +538,17 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
     itab seen_tab = {0};
     ccell *cells = NULL;
     size_t ncells = 0, ccap = 0;
+    /* cell i's discovery edge, parallel to [seen]: parent cell index
+     * and raw field index -- echoed back so the OCaml side can
+     * re-reach the new blocks through Obj.field (coordinates stay
+     * valid across the phase-2 allocations; raw addresses would not).
+     * Entry 0 (the root) is a placeholder. */
+    lvec par_parent = {0}, par_field = {0};
 
     vec_push(&seen, v_root);   /* root is cell 0, at the first layer */
     lvec_push(&modes, nlayers ? 0 : MODE_PAYLOAD);
+    lvec_push(&par_parent, -1);
+    lvec_push(&par_field, -1);
     itab_put(&seen_tab, (uintnat)v_root, 0);
     for (size_t head = 0; head < seen.len; head++) {
         value v = seen.data[head];
@@ -537,23 +600,32 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
                 if (!Is_block(f)) {
                     capture_leaf(&fl, f);
                 } else {
-                    long id = known_lookup(known, nk, (uintnat)f);
+                    long id = mem_lookup(members, nm, (uintnat)f);
                     if (id >= 0) {
-                        fl.k = F_ID;              /* registry boundary */
+                        fl.k = F_ID;     /* defined at an earlier event */
                         fl.ival = (intnat)id;
                     } else if (!Walkable_tag(Tag_val(f))) {
                         capture_leaf(&fl, f);
                     } else {
                         long idx = itab_get(&seen_tab, (uintnat)f);
-                        if (idx < 0) {
+                        if (idx >= 0) {
+                            /* within-walk revisit (sharing or a cycle):
+                             * a back-reference, never a second parent,
+                             * so the node tree stays strict */
+                            fl.k = F_ID;
+                            fl.ival = (intnat)(idx == 0
+                                          ? root_id : next_id + idx - 1);
+                        } else {
                             idx = (long)seen.len;
                             vec_push(&seen, f);
                             lvec_push(&modes, interior_edge
                                                   ? deeper : MODE_PAYLOAD);
+                            lvec_push(&par_parent, (long)head);
+                            lvec_push(&par_field, (long)i);
                             itab_put(&seen_tab, (uintnat)f, idx);
+                            fl.k = F_CHILD;
+                            fl.idx = idx;
                         }
-                        fl.k = F_CHILD;
-                        fl.idx = idx;
                     }
                 }
                 c.fields[c.nfields++] = fl;
@@ -590,10 +662,12 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
             Store_field(cons, 1, lst);
             lst = cons;
         }
-        nodev = caml_alloc(3, 0);
-        Store_field(nodev, 0, caml_copy_nativeint((intnat)c->addr));
-        Store_field(nodev, 1, lst);               /* block */
-        Store_field(nodev, 2, Val_emptylist);     /* children: pass B */
+        nodev = caml_alloc(4, 0);
+        Store_field(nodev, 0, Val_long(i == 0 ? root_id
+                                              : next_id + (long)i - 1));
+        Store_field(nodev, 1, caml_copy_nativeint((intnat)c->addr));
+        Store_field(nodev, 2, lst);               /* block */
+        Store_field(nodev, 3, Val_emptylist);     /* children: pass B */
         Store_field(nodes, i, nodev);
     }
     for (size_t i = 0; i < ncells; i++) {
@@ -607,7 +681,7 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
             Store_field(cons, 1, lst);
             lst = cons;
         }
-        Store_field(Field(nodes, i), 2, lst);
+        Store_field(Field(nodes, i), 3, lst);
     }
 
     /* ---- cleanup ---- */
@@ -626,13 +700,26 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
     free(seen_tab.keys);
     free(seen_tab.idxs);
     layers_free(layers, nlayers);
-    free(known);
+    free(members);
+
+    /* the discovery edges of the new cells (cell 0, the root, is the
+     * caller's own value and needs no path) */
+    pathsarr = ncells > 1 ? caml_alloc(ncells - 1, 0) : Atom(0);
+    for (size_t i = 1; i < ncells; i++) {
+        pairv = caml_alloc(2, 0);
+        Store_field(pairv, 0, Val_long(par_parent.data[i]));
+        Store_field(pairv, 1, Val_long(par_field.data[i]));
+        Store_field(pathsarr, i - 1, pairv);
+    }
+    free(par_parent.data);
+    free(par_field.data);
 
     regarr = alloc_registry(reg, nk);
     registry_free(reg, nk);
-    resv = caml_alloc(2, 0);
+    resv = caml_alloc(3, 0);
     Store_field(resv, 0, Field(nodes, 0));
     Store_field(resv, 1, regarr);
+    Store_field(resv, 2, pathsarr);
     CAMLreturn(resv);
 }
 
