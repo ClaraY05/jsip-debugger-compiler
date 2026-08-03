@@ -17,6 +17,7 @@ type block = Sexp.block =
   | Float_array of float list
   | Address of nativeint
   | Id of int
+  | Child
 
 type node = Sexp.node = {
   id : int;
@@ -88,4 +89,16 @@ val snapshot :
   loc:string * int * int * int -> fn:string * string -> ds:string
   -> args:(string * string * string) list -> name:string
   -> ty:string * (string * string) list
+  -> schema:(string list * int list * int) list * (string * int) list
   -> 'a -> unit
+(* [schema] describes the USER DATA this root can reach, so the walker
+   can label payload blocks instead of numbering their fields: a table
+   of block shapes plus the entry each of [ty]'s roles resolves to.
+   An entry is (labels, fields, kind) -- [labels] names fields
+   positionally ("" = unnamed, fall back to the index), [fields] gives
+   per field the entry describing what it points at (-1 = unknown),
+   and [kind] is 0 for a fixed-size block (record, tuple, list cell) or
+   1 for an array whose every slot takes the single entry in [fields].
+   Entries may refer to themselves: that is how a list cell's tail and
+   a recursive record close their loop.  [Data_structure.payload_roles]
+   says which field of which layer each role attaches to. *)

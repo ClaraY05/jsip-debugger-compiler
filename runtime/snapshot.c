@@ -25,12 +25,16 @@
  *     | Int of int | Float of float | String of string
  *     | Int32 of int32 | Int64 of int64 | Nativeint of nativeint
  *     | Float_array of float list | Address of nativeint | Id of int
+ *     | Child
  *   type node  = { id : int; virtual_address : nativeint
  *                ; block : (string * block) list; children : node list }
  *   external traverse :
  *     Obj.t -> (Obj.t * int * string) array -> (Obj.t * int) array
  *     -> int * int
  *     -> (string array * int * int * bool) array
+ *        * (string array * int array * int) array
+ *        * int array array
+ *        * int
  *     -> node * (int * nativeint * string) array * (int * int) array
  *     = "caml_wire_traverse"
  * The DS type itself stays on the OCaml side ([Vreplay.t] pairs it with
@@ -57,24 +61,34 @@
  * re-reach the new blocks through Obj.field and remember them weakly
  * for later events' member tables.
  *
- * Given a [root] to walk, the tables above, and the DS's [layers]
+ * The last argument bundles what steers the walk: the DS's [layers]
  * (one flattened Data_structure.layer per entry: labels, interior mask,
- * payload mask, is_array -- see data_structure.mli), we BFS the
- * in-memory representation reachable from [root] and return it as a
- * tree of [node]s, each node pointing at its children.
+ * payload mask, is_array -- see data_structure.mli); the SCHEMA table
+ * describing user data, derived by the instrumentation from the
+ * program's own type declarations (labels, per-field entry, kind); per
+ * layer the schema entry each field's payload edge leads to; and the
+ * schema entry describing the root block itself, -1 for a container.
+ * Given those we BFS the representation reachable from [root] and
+ * return it as a tree of [node]s.
  *
- * Every BFS entry carries a MODE: interior (an index into [layers]) or
- * payload (user data).  The root starts at layer 0.  In an interior
- * cell, the layer's masks decide each field: interior fields step one
- * layer deeper (clamped to the last -- chains repeat it), payload
- * fields switch to payload mode, unmarked fields (bookkeeping) are
- * dropped.  An interior Fixed layer must match the cell's size exactly;
- * on a mismatch (our expectation diverged from the actual
- * representation) the cell is demoted to payload treatment rather than
- * truncated or mislabeled.  In a payload cell, EVERY field is kept,
- * labels are numeric, and children stay payload: user data is never
- * filtered by DS masks, whatever its arity.  A block's mode is fixed by
- * the first edge that discovers it.
+ * Every BFS entry carries a MODE: a layer index, MODE_PAYLOAD (user
+ * data nothing describes), or a schema entry (encoded below -1).  A
+ * container root starts at layer 0; a user-declared root starts at its
+ * own schema entry.  In an interior cell the layer's masks decide each
+ * field: interior fields step one layer deeper (clamped to the last --
+ * chains repeat it), payload fields take the schema for that slot's
+ * role if there is one and MODE_PAYLOAD otherwise, unmarked fields
+ * (bookkeeping) are dropped.  In a schema cell EVERY field is kept and
+ * takes its label and its child's entry from the schema -- an entry may
+ * point at ITSELF, which is how a list cell's tail terminates.  In a
+ * plain payload cell every field is kept with a numeric label.
+ *
+ * Both structural guards sit in FRONT of the schema: a Fixed layer or a
+ * schema entry whose size disagrees with the cell it landed on is
+ * demoted to payload treatment rather than truncated or mislabeled, and
+ * a non-walkable tag is never entered whatever any table claims.  A
+ * block's mode is fixed by the first edge that discovers it, and the
+ * walk stops queueing new cells at WALK_MAX_CELLS.
  *
  * A kept field becomes, per the rule:
  *
@@ -235,7 +249,20 @@ typedef struct {
     int      is_array;   /* variable size, every element interior */
 } clayer;
 
+/* A queued block's mode: a layer index (>= 0) for the structure's own
+ * skeleton, MODE_PAYLOAD for user data nothing describes, or a schema
+ * entry, encoded below -1 so the two negative cases stay distinct. */
+/* An upper bound on the cells one walk may dump.  Containers were
+ * bounded in practice by their own layouts; a user-declared root is
+ * walked wherever its schema leads, so a big list or a wide graph
+ * needs a stop.  Blocks past the bound are recorded as opaque
+ * addresses, which says "something was here" without following it. */
+#define WALK_MAX_CELLS 4096
+
 #define MODE_PAYLOAD (-1L)
+#define SCHEMA_MODE(i)    (-2L - (long)(i))
+#define IS_SCHEMA_MODE(m) ((m) <= -2L)
+#define SCHEMA_OF_MODE(m) ((mlsize_t)(-2L - (m)))
 
 static clayer *layers_of_value(value v_layers, mlsize_t *out_n)
 {
@@ -267,17 +294,111 @@ static void layers_free(clayer *ls, mlsize_t n)
     free(ls);
 }
 
+/* ---- the user-data schema, copied to C up front ----
+ * Entry i describes one payload block shape, derived by the
+ * instrumentation from the user's type declarations: [labels] names
+ * its fields positionally (an empty name means fall back to the field
+ * index, which is how tuples stay positional), [fields] gives per
+ * field the entry describing what that field points at (-1 = nothing
+ * known), and [is_array] means every slot takes the single entry in
+ * [fields].  An entry may refer to ITSELF -- that is how a list cell's
+ * tail and a recursive record close their loop without the table
+ * growing forever. */
+typedef struct {
+    char   **labels;     /* owned; nlabels entries */
+    mlsize_t nlabels;
+    long    *fields;     /* owned; nfields entries */
+    mlsize_t nfields;
+    int      is_array;
+} cschema;
+
+/* Per layer, the schema entry each field's payload edge leads to. */
+typedef struct {
+    long    *at;         /* owned; n entries, -1 = none */
+    mlsize_t n;
+} cedges;
+
+static char *index_label(mlsize_t i)
+{
+    char buf[32];
+    snprintf(buf, sizeof buf, "%lu", (unsigned long)i);
+    return strdup(buf);
+}
+
 /* Label for kept field [i]: the layer's label in a size-matched interior
  * Fixed cell, the field index everywhere else (payload cells, arrays). */
 static char *field_label(const clayer *ly, mlsize_t i)
 {
     if (ly != NULL && !ly->is_array && i < ly->nlabels)
         return strdup(ly->labels[i]);
-    else {
-        char buf[32];
-        snprintf(buf, sizeof buf, "%lu", (unsigned long)i);
-        return strdup(buf);
+    else
+        return index_label(i);
+}
+
+/* Label for kept field [i] of a schema-described block: the declared
+ * name when there is one, the field index otherwise. */
+static char *schema_label(const cschema *sc, mlsize_t i)
+{
+    if (!sc->is_array && i < sc->nlabels && sc->labels[i][0] != '\0')
+        return strdup(sc->labels[i]);
+    else
+        return index_label(i);
+}
+
+static cschema *schemas_of_value(value v_schemas, mlsize_t *out_n)
+{
+    mlsize_t n = Wosize_val(v_schemas);
+    cschema *ss = n ? malloc(sizeof(cschema) * n) : NULL;
+    for (mlsize_t k = 0; k < n; k++) {
+        value tup = Field(v_schemas, k);
+        value v_labels = Field(tup, 0);
+        value v_fields = Field(tup, 1);
+        ss[k].nlabels = Wosize_val(v_labels);
+        ss[k].labels =
+            ss[k].nlabels ? malloc(sizeof(char *) * ss[k].nlabels) : NULL;
+        for (mlsize_t i = 0; i < ss[k].nlabels; i++)
+            ss[k].labels[i] = strdup(String_val(Field(v_labels, i)));
+        ss[k].nfields = Wosize_val(v_fields);
+        ss[k].fields =
+            ss[k].nfields ? malloc(sizeof(long) * ss[k].nfields) : NULL;
+        for (mlsize_t i = 0; i < ss[k].nfields; i++)
+            ss[k].fields[i] = (long)Long_val(Field(v_fields, i));
+        ss[k].is_array = (Long_val(Field(tup, 2)) == 1);
     }
+    *out_n = n;
+    return ss;
+}
+
+static void schemas_free(cschema *ss, mlsize_t n)
+{
+    for (mlsize_t k = 0; k < n; k++) {
+        for (mlsize_t i = 0; i < ss[k].nlabels; i++)
+            free(ss[k].labels[i]);
+        free(ss[k].labels);
+        free(ss[k].fields);
+    }
+    free(ss);
+}
+
+static cedges *edges_of_value(value v_edges, mlsize_t *out_n)
+{
+    mlsize_t n = Wosize_val(v_edges);
+    cedges *es = n ? malloc(sizeof(cedges) * n) : NULL;
+    for (mlsize_t k = 0; k < n; k++) {
+        value row = Field(v_edges, k);
+        es[k].n = Wosize_val(row);
+        es[k].at = es[k].n ? malloc(sizeof(long) * es[k].n) : NULL;
+        for (mlsize_t i = 0; i < es[k].n; i++)
+            es[k].at[i] = (long)Long_val(Field(row, i));
+    }
+    *out_n = n;
+    return es;
+}
+
+static void edges_free(cedges *es, mlsize_t n)
+{
+    for (mlsize_t k = 0; k < n; k++) free(es[k].at);
+    free(es);
 }
 
 /* ---- C-side record of one retained (masked) field ---- */
@@ -432,6 +553,12 @@ static value alloc_block(const cfield *fl)
         bx = caml_alloc(1, 8);
         Store_field(bx, 0, Val_long(fl->ival));
         break;
+    case F_CHILD:
+        /* [Child]: the sole CONSTANT constructor, so an immediate --
+         * which is why it does not disturb the boxed tags above.  It
+         * stands in [block] for the next node of [children]. */
+        bx = Val_long(0);
+        break;
     default:                               /* F_ADDR */
         bx = caml_alloc(1, 7);
         Store_field(bx, 0, caml_copy_nativeint((intnat)fl->ptr));
@@ -448,9 +575,9 @@ static value alloc_block(const cfield *fl)
  *   = "caml_wire_traverse" */
 CAMLprim value caml_wire_traverse(value v_root, value v_known,
                                   value v_members, value v_ids,
-                                  value v_layers)
+                                  value v_layout)
 {
-    CAMLparam5(v_root, v_known, v_members, v_ids, v_layers);
+    CAMLparam5(v_root, v_known, v_members, v_ids, v_layout);
     CAMLlocal5(nodes, nodev, lst, ent, bx);
     CAMLlocal5(cons, regarr, resv, pathsarr, pairv);
 
@@ -531,8 +658,11 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
 
     /* ---- phase 1: BFS, no OCaml allocation (the layer copy strdups,
      * which is C allocation only) ---- */
-    mlsize_t nlayers = 0;
-    clayer *layers = layers_of_value(v_layers, &nlayers);
+    mlsize_t nlayers = 0, nschemas = 0, nedges = 0;
+    clayer *layers = layers_of_value(Field(v_layout, 0), &nlayers);
+    cschema *schemas = schemas_of_value(Field(v_layout, 1), &nschemas);
+    cedges *edges = edges_of_value(Field(v_layout, 2), &nedges);
+    long root_entry = (long)Long_val(Field(v_layout, 3));
     vec seen = {0};
     lvec modes = {0};
     itab seen_tab = {0};
@@ -545,8 +675,12 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
      * Entry 0 (the root) is a placeholder. */
     lvec par_parent = {0}, par_field = {0};
 
-    vec_push(&seen, v_root);   /* root is cell 0, at the first layer */
-    lvec_push(&modes, nlayers ? 0 : MODE_PAYLOAD);
+    /* root is cell 0: at the first layer for a container, or in schema
+     * mode when the root block is itself user-declared data */
+    vec_push(&seen, v_root);
+    lvec_push(&modes,
+              root_entry >= 0 ? SCHEMA_MODE(root_entry)
+                              : (nlayers ? 0 : MODE_PAYLOAD));
     lvec_push(&par_parent, -1);
     lvec_push(&par_field, -1);
     itab_put(&seen_tab, (uintnat)v_root, 0);
@@ -561,8 +695,21 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
         if (Walkable_tag(Tag_val(v))) {
             mlsize_t n = Wosize_val(v);
             const clayer *ly = NULL;
-            int payload_cell = (mode == MODE_PAYLOAD);
-            if (!payload_cell) {
+            const cschema *sc = NULL;
+            int payload_cell = 0;
+            if (IS_SCHEMA_MODE(mode)) {
+                mlsize_t si = SCHEMA_OF_MODE(mode);
+                if (si < nschemas) {
+                    sc = &schemas[si];
+                    /* the block is not the shape the schema describes:
+                     * whatever the type said, the bytes disagree, so
+                     * treat it as plain user data rather than mislabel */
+                    if (!sc->is_array && n != sc->nfields) sc = NULL;
+                }
+                if (sc == NULL) payload_cell = 1;
+            } else if (mode == MODE_PAYLOAD) {
+                payload_cell = 1;
+            } else {
                 ly = &layers[mode];
                 if (!ly->is_array && n != ly->nlabels) {
                     /* the representation didn't match the layer we
@@ -575,28 +722,49 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
             /* where interior edges out of this cell lead: one layer
              * deeper, the last layer repeating */
             long deeper =
-                payload_cell ? MODE_PAYLOAD
+                ly == NULL ? MODE_PAYLOAD
                 : (mode + 1 < (long)nlayers ? mode + 1
                                             : (long)nlayers - 1);
             c.fields = malloc(sizeof(cfield) * (n ? n : 1));
             for (mlsize_t i = 0; i < n; i++) {
-                int keep, interior_edge;
-                if (payload_cell) {
-                    keep = 1; interior_edge = 0;
+                int keep;
+                long child_mode;   /* where a block in this field goes */
+                if (sc != NULL) {
+                    /* user data: every field is kept, and the schema
+                     * says what each one points at */
+                    long e = sc->is_array
+                             ? (sc->nfields ? sc->fields[0] : -1L)
+                             : sc->fields[i];
+                    keep = 1;
+                    child_mode = e >= 0 ? SCHEMA_MODE(e) : MODE_PAYLOAD;
+                } else if (payload_cell) {
+                    keep = 1; child_mode = MODE_PAYLOAD;
                 } else if (ly->is_array) {
-                    keep = 1; interior_edge = 1;
+                    keep = 1; child_mode = deeper;
                 } else {
                     int in_i = i < 8 * sizeof(uintnat)
                                && ((ly->interior >> i) & 1u);
                     int in_p = i < 8 * sizeof(uintnat)
                                && ((ly->payload >> i) & 1u);
                     keep = in_i || in_p;      /* neither: bookkeeping */
-                    interior_edge = in_i;
+                    if (in_i)
+                        child_mode = deeper;
+                    else {
+                        /* a payload edge: hand the user data below it
+                         * to the schema for this slot's role, if the
+                         * instrumentation could describe one */
+                        long e = (mode >= 0 && (mlsize_t)mode < nedges
+                                  && i < edges[mode].n)
+                                 ? edges[mode].at[i] : -1L;
+                        child_mode = e >= 0 ? SCHEMA_MODE(e) : MODE_PAYLOAD;
+                    }
                 }
                 if (!keep) continue;
                 value f = Field(v, i);
                 cfield fl = {0};
-                fl.label = field_label(payload_cell ? NULL : ly, i);
+                fl.label = sc != NULL ? schema_label(sc, i)
+                                      : field_label(payload_cell ? NULL : ly,
+                                                    i);
                 if (!Is_block(f)) {
                     capture_leaf(&fl, f);
                 } else {
@@ -615,11 +783,15 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
                             fl.k = F_ID;
                             fl.ival = (intnat)(idx == 0
                                           ? root_id : next_id + idx - 1);
+                        } else if (seen.len >= WALK_MAX_CELLS) {
+                            /* budget spent: name the field, but record
+                             * the block opaquely instead of walking it */
+                            fl.k = F_ADDR;
+                            fl.ptr = (uintnat)f;
                         } else {
                             idx = (long)seen.len;
                             vec_push(&seen, f);
-                            lvec_push(&modes, interior_edge
-                                                  ? deeper : MODE_PAYLOAD);
+                            lvec_push(&modes, child_mode);
                             lvec_push(&par_parent, (long)head);
                             lvec_push(&par_field, (long)i);
                             itab_put(&seen_tab, (uintnat)f, idx);
@@ -630,6 +802,18 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
                 }
                 c.fields[c.nfields++] = fl;
             }
+        } else {
+            /* A non-walkable block only ever reaches the queue as the
+             * ROOT (as a field it would have been captured in place):
+             * a float array, an all-float record, a string.  Decode it
+             * as this node's sole entry -- emitting an empty node
+             * would lose the value entirely. */
+            cfield fl = {0};
+            fl.label = index_label(0);
+            capture_leaf(&fl, v);
+            c.fields = malloc(sizeof(cfield));
+            c.fields[0] = fl;
+            c.nfields = 1;
         }
 
         if (ncells == ccap) {
@@ -652,8 +836,7 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
         lst = Val_emptylist;
         for (mlsize_t j = c->nfields; j-- > 0; ) {
             cfield *fl = &c->fields[j];
-            if (fl->k == F_CHILD) continue;
-            bx = alloc_block(fl);
+            bx = alloc_block(fl);   /* F_CHILD becomes the [Child] marker */
             ent = caml_alloc(2, 0);
             Store_field(ent, 0, caml_copy_string(fl->label));
             Store_field(ent, 1, bx);
@@ -700,6 +883,8 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
     free(seen_tab.keys);
     free(seen_tab.idxs);
     layers_free(layers, nlayers);
+    schemas_free(schemas, nschemas);
+    edges_free(edges, nedges);
     free(members);
 
     /* the discovery edges of the new cells (cell 0, the root, is the
