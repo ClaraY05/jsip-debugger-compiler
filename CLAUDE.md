@@ -151,8 +151,10 @@ runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
 `caml_wire_emit` / `caml_wire_traverse`; without it the program dies with
 `unavailable primitive caml_wire_emit`.
 
-**Do not use `_install/bin/ocamlc*`** — those binaries have shebangs
-pointing at paths that don't exist on this machine.
+`_install/` currently holds only `lib/ocaml` in both checkouts — there is no
+`_install/bin` unless someone runs `make install`, and if they do, prefer
+the invocation above to the installed binaries anyway (their shebangs point
+at whatever path the tree was configured with).
 
 ### Where the dump goes — *not* stdout
 
@@ -190,8 +192,8 @@ VREPLAY_FILE=/tmp/neg.dump /tmp/neg.out
 test ! -e /tmp/neg.dump && echo "no events, as expected"
 ```
 
-(`testing/expected/neg_*.dump` are 0-byte files because the harness creates
-them; the runtime does not.)
+(`testing/expected/neg_*.dump` are 0-byte files because `run_tests.sh:70`
+truncates the dump into existence before the run; the runtime does not.)
 
 Positive — a Map program. Three events fire (the two `M.add` and the
 `M.remove`); `empty` is an ident not an application, `find` returns the
@@ -291,7 +293,14 @@ about serialization.** It is a prose specification as much as an interface:
 the block-representation table, the delta/sharing rules, the registry
 format, and the `ty` shape are all documented there.
 
-The two repos are **in sync**. Every event is one line:
+Both sides derive from this one schema — no string parsing remains anywhere
+— but **the interface trails the compiler by design**: a structure lands
+here first, and the interface has to grow the matching `Ds_type`
+constructor before it can read the newer dumps. As of 2026-08-03 its `main`
+handles `Map`/`Set`/`Queue` while this repo also emits `Hashtbl` and `User`.
+Assume a freshly vendored dump needs interface work, not that it is broken.
+
+Every event is one line:
 
 ```
 (event (id N) (loc ...) (fn ...) (args ...) (registry ...) (ty ...) (snapshot ...))
