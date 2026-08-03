@@ -191,18 +191,78 @@ let classify (exp : Typedtree.expression)
     end
   | _ -> None
 
+(* ---- the static type each root carries ---- *)
+
+(* [ty] printed as the user reads it at [env]: inside
+   [wrap_printing_env] so paths shorten against the caller's scope
+   ([int M.t], not a fully-qualified functor application).
+   [type_scheme] keeps generalized variables as ['a] where [type_expr]
+   would print ['_weak1]; a variable the unit never constrained still
+   prints weak, which is the honest answer. *)
+let print_type env ty =
+  Printtyp.wrap_printing_env ~error:false env
+    (fun () -> Format.asprintf "%a" Printtyp.type_scheme ty)
+
+(* The sibling type a functor result names its contents by -- [M.key]
+   for a map [M.t], [M.elt] for a set -- fully expanded, so
+   [Map.Make(String)]'s key prints [string] rather than [M.key].  Only
+   a dotted head has a module to look inside; anything else (a bare
+   [include Map.Make(String)], a functor parameter) fails closed and
+   the caller omits the role. *)
+let sibling_type env t_path name =
+  match (t_path : Path.t) with
+  | Pdot (parent, _) ->
+    let path = Path.Pdot (parent, name) in
+    begin match Env.find_type path env with
+    | decl ->
+      if decl.type_arity = 0
+      then Some (Ctype.expand_head env (Ctype.newconstr path []))
+      else None
+    | exception Not_found -> None
+    end
+  | Pident _ | Papply _ | Pextra_ty _ -> None
+
+(* The per-role type parameters of a root of kind [ds], keyed the way a
+   reader labels them: a map has a [key] and [data], a set an [elt].
+   [Map]/[Set] are functor results whose [t] hides the key/element, so
+   those come from the sibling type; [Queue]/[Hashtbl] carry theirs as
+   ordinary type arguments.  A role that cannot be resolved is omitted
+   -- the printed type alone still describes the root. *)
+let type_params env ~ds ty =
+  match Types.get_desc (Ctype.expand_head env ty) with
+  | Types.Tconstr (path, args, _) ->
+    let sibling name =
+      match sibling_type env path name with
+      | Some ty -> [ (name, print_type env ty) ]
+      | None -> []
+    in
+    begin match ds, args with
+    | "Map", [ data ] -> sibling "key" @ [ ("data", print_type env data) ]
+    | "Set", [] -> sibling "elt"
+    | "Queue", [ elt ] -> [ ("elt", print_type env elt) ]
+    | "Hashtbl", [ key; data ] ->
+      [ ("key", print_type env key); ("data", print_type env data) ]
+    | _ -> []
+    end
+  | _ -> []
+
+(* the [ty] argument of an event: the root's type as inferred (aliases
+   kept -- expansion happens only to find the head), plus the roles *)
+let root_ty ~ds (e : Typedtree.expression) =
+  (print_type e.exp_env e.exp_type, type_params e.exp_env ~ds e.exp_type)
+
 (* ---- the injected observation ---- *)
 
-(* Build and type [Vreplay.snapshot ~loc ~fn ~ds ~args ~name <root>] in
-   [env].  [root] is always a plain identifier -- [__vreplay_res] or a
+(* Build and type [Vreplay.snapshot ~loc ~fn ~ds ~args ~name ~ty <root>]
+   in [env].  [root] is always a plain identifier -- [__vreplay_res] or a
    mutated argument ([argument_roots] only accepts idents) -- so typing
    it in the post-call env resolves to the value in scope there.  [name]
    is the identifier the root is known by in the source ("" = none);
-   [loc], [fn], [args] and [name] become literal tuples/lists of string
-   and int constants in [Wire.t]'s shapes.  [Vreplay] is resolved by
-   ordinary name resolution against the instrumented unit's load path
-   ("+vreplay", driver/compmisc.ml). *)
-let snapshot_call env ~loc ~fn ~ds ~args ~name ~root =
+   [loc], [fn], [args], [name] and [ty] become literal tuples/lists of
+   string and int constants in [Wire.t]'s and [root_ty]'s shapes.
+   [Vreplay] is resolved by ordinary name resolution against the
+   instrumented unit's load path ("+vreplay", driver/compmisc.ml). *)
+let snapshot_call env ~loc ~fn ~ds ~args ~name ~ty ~root =
   let str s =
     Ast_helper.Exp.constant
       { pconst_desc = Pconst_string (s, Location.none, None)
@@ -216,15 +276,17 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~root =
   let tuple parts =
     Ast_helper.Exp.tuple (List.map (fun e -> (None, e)) parts)
   in
-  let rec list_of = function
+  let rec list_of elt = function
     | [] ->
       Ast_helper.Exp.construct
         (Location.mknoloc (Longident.Lident "[]")) None
-    | (k, l, v) :: rest ->
+    | x :: rest ->
       Ast_helper.Exp.construct
         (Location.mknoloc (Longident.Lident "::"))
-        (Some (tuple [ tuple [ str k; str l; str v ]; list_of rest ]))
+        (Some (tuple [ elt x; list_of elt rest ]))
   in
+  let arg_triple (k, l, v) = tuple [ str k; str l; str v ] in
+  let ty_pair (role, t) = tuple [ str role; str t ] in
   let snapshot_fn =
     Ast_helper.Exp.ident
       (Location.mknoloc
@@ -234,14 +296,17 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~root =
   in
   let file, line, char_start, char_end = loc in
   let fn_kind, fn_text = fn in
+  let ty_printed, ty_params = ty in
   Typecore.type_expression env
     (Ast_helper.Exp.apply snapshot_fn
        [ ( Asttypes.Labelled "loc"
          , tuple [ str file; int line; int char_start; int char_end ] )
        ; (Asttypes.Labelled "fn", tuple [ str fn_kind; str fn_text ])
        ; (Asttypes.Labelled "ds",  str ds)
-       ; (Asttypes.Labelled "args", list_of args)
+       ; (Asttypes.Labelled "args", list_of arg_triple args)
        ; (Asttypes.Labelled "name", str name)
+       ; ( Asttypes.Labelled "ty"
+         , tuple [ str ty_printed; list_of ty_pair ty_params ] )
        ; (Asttypes.Nolabel, Ast_helper.Exp.ident (Location.mknoloc root)) ])
 
 (* the identifier the post-call hook reads: the bound result, or the
@@ -253,6 +318,16 @@ let root_lid args = function
     | (_, Typedtree.Arg
            { Typedtree.exp_desc = Texp_ident (_, lid, _); _ }) -> lid.txt
     | _ -> assert false (* [argument_roots] only returns ident positions *)
+    end
+
+(* the typed expression a root's static type is read off: the whole
+   application for a Result, the argument at that position otherwise *)
+let root_expression (exp : Typedtree.expression) args = function
+  | Result -> exp
+  | Argument i ->
+    begin match List.nth args i with
+    | (_, Typedtree.Arg a) -> a
+    | _ -> assert false (* [argument_roots] only returns [Arg] positions *)
     end
 
 (* ---- code generation ---- *)
@@ -395,11 +470,12 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
                    Format.asprintf "%a" Pprintast.longident
                      (root_lid args root)
                in
+               let ty = root_ty ~ds (root_expression exp args root) in
                let root = root_lid args root in
                fun env ->
                  snapshot_call env ~loc:wire.Wire.location
                    ~fn:wire.Wire.function_info ~ds
-                   ~args:wire.Wire.argument_list ~name ~root)
+                   ~args:wire.Wire.argument_list ~name ~ty ~root)
             roots
         in
         { exp with

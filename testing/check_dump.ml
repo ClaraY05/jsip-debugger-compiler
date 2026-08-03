@@ -1,6 +1,6 @@
 (* Validates a -visual-replay dump.  Every line must be a leading run of
    {} depth markers followed by at most one event sexp; every event must
-   have the six wrapper fields in order; every snapshot must round-trip
+   have the seven wrapper fields in order; every snapshot must round-trip
    through Vreplay.from_sexp/to_sexp; depth must return to 0 at EOF.
    Usage: check_dump <dump-file>.  Exits 1 on the first violation. *)
 
@@ -39,6 +39,7 @@ let () =
                  ; Sexp.List [ Sexp.Atom _; Sexp.Atom _ ] ]
              ; Sexp.List [ Sexp.Atom "args"; Sexp.List args ]
              ; Sexp.List [ Sexp.Atom "registry"; Sexp.List reg ]
+             ; Sexp.List [ Sexp.Atom "ty"; Sexp.List ty ]
              ; Sexp.List [ Sexp.Atom "snapshot"; snap ] ] ->
            List.iter
              (function
@@ -53,6 +54,15 @@ let () =
                  ()
                | _ -> fail !lineno "malformed registry entry")
              reg;
+           (match ty with
+            | [ Sexp.List [ Sexp.Atom "printed"; Sexp.Atom _ ]
+              ; Sexp.List [ Sexp.Atom "params"; Sexp.List params ] ] ->
+              List.iter
+                (function
+                  | Sexp.List [ Sexp.Atom _; Sexp.Atom _ ] -> ()
+                  | _ -> fail !lineno "malformed ty param")
+                params
+            | _ -> fail !lineno "malformed ty field");
            let s =
              try Vreplay.from_sexp snap
              with Failure m -> fail !lineno m

@@ -35,16 +35,16 @@ type t = Sexp.snapshot = {
 val to_sexp : t -> Sexp.t
 val from_sexp : Sexp.t -> t
 
-(* [snapshot ~loc ~fn ~ds ~args ~name root] assigns [root] a stable id
-   (holding it weakly), has the C walker build the [node] tree for it,
-   and emits one line through [caml_wire_emit]:
+(* [snapshot ~loc ~fn ~ds ~args ~name ~ty root] assigns [root] a stable
+   id (holding it weakly), has the C walker build the [node] tree for
+   it, and emits one line through [caml_wire_emit]:
 
      (event (id 2)
        (loc ((file_path t.ml) (line_number 4) (char_range (10 23))))
        (fn (Function_name M.add))
        (args ((No_label (expression (Unnamed "\"a\"")))
               (No_label (expression (Unnamed m)))))
-       (registry ...) (snapshot <to_sexp>))
+       (registry ...) (ty ...) (snapshot <to_sexp>))
 
    [loc], [fn] and [args] are computed at compile time and rendered in
    the interface repo's own type shapes (see Sexp.sexp_of_loc/fn/args).
@@ -60,6 +60,12 @@ val from_sexp : Sexp.t -> t
    entry can rename between events as the program passes the value
    around.
 
+   [ty] is the root's static type as the instrumentation printed it off
+   the typedtree -- the full type plus the role-labelled parameters a
+   reader displays without parsing OCaml syntax; see [Sexp.sexp_of_ty].
+   It describes THIS record's root (each record carries its own), and a
+   structure's latest record carries its current display type.
+
    One CALL can carry several observations: the instrumentation injects
    one [snapshot] -- one record -- per root (each mutated container
    argument, then a structure result), all inside the call's single
@@ -68,4 +74,5 @@ val from_sexp : Sexp.t -> t
 val snapshot :
   loc:string * int * int * int -> fn:string * string -> ds:string
   -> args:(string * string * string) list -> name:string
+  -> ty:string * (string * string) list
   -> 'a -> unit
