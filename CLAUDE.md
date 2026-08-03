@@ -493,6 +493,11 @@ compile failure plus three fail-fast cancellations, so read the first one.
 
 ### Pull requests
 
+The repo was renamed on GitHub to **`ClaraY05/jsip-debugger-compiler`**. The
+local `origin` still points at the old `ClaraY05/jsip_debugger.git`, so every
+push prints `remote: This repository moved.` — harmless (GitHub redirects),
+but use the new name in every `gh` command.
+
 **Never open a PR against upstream `ocaml/ocaml`.** This is a fork and `gh`
 will happily default to the parent. Always be explicit:
 
