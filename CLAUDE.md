@@ -133,11 +133,22 @@ change. `make depend` and commit it once to be rid of it.
 
 ## Run the feature end to end
 
-**A bare `./ocamlc foo.ml` does not work.** The binary's shebang points at a
-runtime path that may not exist (`cannot execute: required file not found`),
-and depending on how the tree was configured `standard_library` may point
-somewhere unpopulated. Use the config-independent invocation
-(`TEST.README.md` has the long-form version, verified in-tree):
+**Every bytecode tool in this tree must be run under `runtime/ocamlrun`.**
+A bare `./ocamlc`, `./tools/ocamlobjinfo`, … dies on its shebang with
+`cannot execute: required file not found`, and because that is a shell
+failure rather than a tool error it usually shows up as *empty output* —
+which reads as a real answer and sends you debugging the wrong thing.
+Prefix everything:
+
+```sh
+runtime/ocamlrun ./ocamlc -config
+runtime/ocamlrun ./tools/ocamlobjinfo compilerlibs/ocamlcommon.cma
+```
+
+For compiling, also note that depending on how the tree was configured
+`standard_library` may point somewhere unpopulated, so use the
+config-independent invocation (`TEST.README.md` has the long-form version,
+verified in-tree):
 
 ```sh
 runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
@@ -440,9 +451,13 @@ dune is only a Merlin helper here, that's backwards.
 ### Fixed — don't go looking for these
 
 - *`ocamlc` silently stops relinking* (the `parsing_SOURCES` prefix bug).
-  Note the check this file used to recommend gives a false negative:
-  `strings compilerlibs/ocamlcommon.cma | grep -c '^Snapshot$'` returns 0.
-  Use `./tools/ocamlobjinfo compilerlibs/ocamlcommon.cma | grep Snapshot`.
+  Two false negatives to avoid if you check whether a unit made it into the
+  library: `strings compilerlibs/ocamlcommon.cma | grep -c '^Snapshot$'`
+  returns 0 even when it is there, and a **bare** `./tools/ocamlobjinfo`
+  dies on its shebang and prints nothing, which reads as "absent". The
+  working form is
+  `runtime/ocamlrun ./tools/ocamlobjinfo compilerlibs/ocamlcommon.cma | grep Snapshot`
+  → `Unit name: Snapshot`.
 - *`wire_external` unreachable.* It lives at the top level of
   `vreplay_instrumentation.ml` now.
 - *The dump interleaving with the program's stdout.* Fixed by the dedicated
