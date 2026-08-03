@@ -283,7 +283,7 @@ let emit_event ~loc ~fn ~args ~id ~registry ~ty snap =
   emit (Sexp.to_string line ^ "\n")
 
 (* ---- entry point injected at every event ---- *)
-let snapshot ~loc ~fn ~ds ~args ~name ~ty root =
+let snapshot ~loc ~fn ~ds ~args ~name ~ty ~schema:_ root =
   match Data_structure.of_module ds with
   | None -> ()                              (* not a tracked data structure *)
   | Some ds_ty ->

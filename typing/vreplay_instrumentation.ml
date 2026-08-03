@@ -228,28 +228,167 @@ let sibling_type env t_path name =
    those come from the sibling type; [Queue]/[Hashtbl] carry theirs as
    ordinary type arguments.  A role that cannot be resolved is omitted
    -- the printed type alone still describes the root. *)
-let type_params env ~ds ty =
+let role_types env ~ds ty =
   match Types.get_desc (Ctype.expand_head env ty) with
   | Types.Tconstr (path, args, _) ->
     let sibling name =
       match sibling_type env path name with
-      | Some ty -> [ (name, print_type env ty) ]
+      | Some ty -> [ (name, ty) ]
       | None -> []
     in
     begin match ds, args with
-    | "Map", [ data ] -> sibling "key" @ [ ("data", print_type env data) ]
+    | "Map", [ data ] -> sibling "key" @ [ ("data", data) ]
     | "Set", [] -> sibling "elt"
-    | "Queue", [ elt ] -> [ ("elt", print_type env elt) ]
-    | "Hashtbl", [ key; data ] ->
-      [ ("key", print_type env key); ("data", print_type env data) ]
+    | "Queue", [ elt ] -> [ ("elt", elt) ]
+    | "Hashtbl", [ key; data ] -> [ ("key", key); ("data", data) ]
     | _ -> []
     end
   | _ -> []
+
+(* the same roles, printed for the [ty] payload *)
+let type_params env ~ds ty =
+  List.map
+    (fun (role, t) -> (role, print_type env t))
+    (role_types env ~ds ty)
 
 (* the [ty] argument of an event: the root's type as inferred (aliases
    kept -- expansion happens only to find the head), plus the roles *)
 let root_ty ~ds (e : Typedtree.expression) =
   (print_type e.exp_env e.exp_type, type_params e.exp_env ~ds e.exp_type)
+
+(* ---- payload schemas: what the walker labels user data with ---- *)
+
+(* Entry [i] of a schema table describes one user-data block shape.
+   [labels] names its fields positionally ("" = unnamed, so the walker
+   falls back to the field index); [fields] gives, per field, the entry
+   describing the block that field points at, or [no_schema] when the
+   type does not say.  [kind] is [kind_fixed] for a fixed-size block --
+   a record, a tuple, a list cell -- and [kind_array] for an array,
+   every slot of which takes the single entry in [fields].
+
+   Variants are not described here: telling [Foo x] from [Bar x] needs
+   the block tag, which the wire does not carry yet.  Neither is a
+   field left as a type variable -- [ld_type] is written in the
+   declaration's own parameters, not the ones at this use site. *)
+
+type schema_entry =
+  { labels : string list
+  ; fields : int list
+  ; kind : int }
+
+let no_schema = -1
+let kind_fixed = 0
+let kind_array = 1
+
+(* deep nesting must not turn one event into an unbounded literal *)
+let max_schema_entries = 64
+
+type schema_tbl =
+  { slots : (int, schema_entry) Hashtbl.t
+  ; memo : (string, int) Hashtbl.t
+  ; mutable n : int }
+
+let new_schema_tbl () =
+  { slots = Hashtbl.create 8; memo = Hashtbl.create 8; n = 0 }
+
+(* an index is handed out before the entry is filled, so a type under
+   construction can already be referred to *)
+let reserve tbl = let i = tbl.n in tbl.n <- i + 1; i
+let fill tbl i entry = Hashtbl.replace tbl.slots i entry
+
+let schema_entries tbl =
+  List.init tbl.n (fun i ->
+    match Hashtbl.find_opt tbl.slots i with
+    | Some e -> e
+    | None -> { labels = []; fields = []; kind = kind_fixed })
+
+(* [describe_type env tbl ty] adds the entries describing [ty]'s blocks
+   to [tbl] and returns [ty]'s own entry.  A named type is memoized --
+   under its PRINTED form, so [int list] and [string list] stay
+   distinct -- before its fields are described, which is what makes a
+   recursive type close the loop on the entry under construction
+   instead of expanding forever. *)
+let rec describe_type env tbl ty =
+  if tbl.n >= max_schema_entries then no_schema
+  else
+    let ty = Ctype.expand_head env ty in
+    match Types.get_desc ty with
+    | Types.Ttuple parts ->
+      let i = reserve tbl in
+      let labels =
+        List.map (function (Some l, _) -> l | (None, _) -> "") parts
+      in
+      let fields = List.map (fun (_, t) -> describe_type env tbl t) parts in
+      fill tbl i { labels; fields; kind = kind_fixed };
+      i
+    | Types.Tconstr (path, args, _) ->
+      let key = print_type env ty in
+      begin match Hashtbl.find_opt tbl.memo key with
+      | Some i -> i
+      | None ->
+        let element () =
+          match args with
+          | [ e ] -> describe_type env tbl e
+          | [] | _ :: _ :: _ -> no_schema
+        in
+        if Path.same path Predef.path_list then begin
+          (* a cell is  hd :: tl , the tail taking this same entry *)
+          let i = reserve tbl in
+          Hashtbl.replace tbl.memo key i;
+          let e = element () in
+          fill tbl i
+            { labels = [ "hd"; "tl" ]
+            ; fields = [ e; i ]
+            ; kind = kind_fixed };
+          i
+        end
+        else if Path.same path Predef.path_array then begin
+          let i = reserve tbl in
+          Hashtbl.replace tbl.memo key i;
+          let e = element () in
+          fill tbl i { labels = []; fields = [ e ]; kind = kind_array };
+          i
+        end
+        else begin
+          match Env.find_type path env with
+          | { Types.type_kind =
+                Types.Type_record (lbls, Types.Record_regular); _ } ->
+            let i = reserve tbl in
+            Hashtbl.replace tbl.memo key i;
+            let labels =
+              List.map (fun ld -> Ident.name ld.Types.ld_id) lbls
+            in
+            let fields =
+              List.map
+                (fun ld -> describe_type env tbl ld.Types.ld_type)
+                lbls
+            in
+            fill tbl i { labels; fields; kind = kind_fixed };
+            i
+          | { Types.type_kind = _; _ } -> no_schema
+          | exception Not_found -> no_schema
+        end
+      end
+    | Types.Tvar _ | Types.Tarrow _ | Types.Tobject _ | Types.Tfield _
+    | Types.Tnil | Types.Tlink _ | Types.Tsubst _ | Types.Tvariant _
+    | Types.Tunivar _ | Types.Tpoly _ | Types.Tpackage _
+    | Types.Tfunctor _ -> no_schema
+
+(* The payload schemas a root of kind [ds] can reach: one shared table
+   plus the entry each role of [type_params] resolves to.  A role the
+   schema cannot describe is omitted, exactly as an unresolved role is
+   omitted from [ty]. *)
+let root_schema ~ds (e : Typedtree.expression) =
+  let env = e.exp_env in
+  let tbl = new_schema_tbl () in
+  let roles =
+    List.filter_map
+      (fun (role, t) ->
+         let i = describe_type env tbl t in
+         if i = no_schema then None else Some (role, i))
+      (role_types env ~ds e.exp_type)
+  in
+  (schema_entries tbl, roles)
 
 (* ---- the injected observation ---- *)
 
@@ -262,7 +401,7 @@ let root_ty ~ds (e : Typedtree.expression) =
    string and int constants in [Wire.t]'s and [root_ty]'s shapes.
    [Vreplay] is resolved by ordinary name resolution against the
    instrumented unit's load path ("+vreplay", driver/compmisc.ml). *)
-let snapshot_call env ~loc ~fn ~ds ~args ~name ~ty ~root =
+let snapshot_call env ~loc ~fn ~ds ~args ~name ~ty ~schema ~root =
   let str s =
     Ast_helper.Exp.constant
       { pconst_desc = Pconst_string (s, Location.none, None)
@@ -287,6 +426,10 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~ty ~root =
   in
   let arg_triple (k, l, v) = tuple [ str k; str l; str v ] in
   let ty_pair (role, t) = tuple [ str role; str t ] in
+  let schema_entry e =
+    tuple [ list_of str e.labels; list_of int e.fields; int e.kind ]
+  in
+  let schema_role (role, i) = tuple [ str role; int i ] in
   let snapshot_fn =
     Ast_helper.Exp.ident
       (Location.mknoloc
@@ -297,6 +440,7 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~ty ~root =
   let file, line, char_start, char_end = loc in
   let fn_kind, fn_text = fn in
   let ty_printed, ty_params = ty in
+  let schema_tbl, schema_roles = schema in
   Typecore.type_expression env
     (Ast_helper.Exp.apply snapshot_fn
        [ ( Asttypes.Labelled "loc"
@@ -307,6 +451,10 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~ty ~root =
        ; (Asttypes.Labelled "name", str name)
        ; ( Asttypes.Labelled "ty"
          , tuple [ str ty_printed; list_of ty_pair ty_params ] )
+       ; ( Asttypes.Labelled "schema"
+         , tuple
+             [ list_of schema_entry schema_tbl
+             ; list_of schema_role schema_roles ] )
        ; (Asttypes.Nolabel, Ast_helper.Exp.ident (Location.mknoloc root)) ])
 
 (* the identifier the post-call hook reads: the bound result, or the
@@ -470,12 +618,14 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
                    Format.asprintf "%a" Pprintast.longident
                      (root_lid args root)
                in
-               let ty = root_ty ~ds (root_expression exp args root) in
+               let root_exp = root_expression exp args root in
+               let ty = root_ty ~ds root_exp in
+               let schema = root_schema ~ds root_exp in
                let root = root_lid args root in
                fun env ->
                  snapshot_call env ~loc:wire.Wire.location
                    ~fn:wire.Wire.function_info ~ds
-                   ~args:wire.Wire.argument_list ~name ~ty ~root)
+                   ~args:wire.Wire.argument_list ~name ~ty ~schema ~root)
             roots
         in
         { exp with
