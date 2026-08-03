@@ -892,6 +892,10 @@ vreplay/vreplay.cma: vreplay/data_structure.cmo vreplay/sexp.cmo \
     vreplay/vreplay.cmo ocamlc
 	$(VREPLAY_OCAMLC) -a -o $@ vreplay/data_structure.cmo \
 	    vreplay/sexp.cmo vreplay/vreplay.cmo
+# The library's artefacts are gitignored, so a distclean that left them
+# behind fails CI's "tree is clean after distclean" check.
+partialclean::
+	rm -f vreplay/*.cm*
 
 # Bootstrap and rebuild the whole system.
 # The compilation of ocaml will fail if the runtime has changed.
