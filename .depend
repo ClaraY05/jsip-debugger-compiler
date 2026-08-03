@@ -2377,6 +2377,7 @@ typing/vreplay_instrumentation.cmo : \
     typing/tast_mapper.cmi \
     typing/shape.cmi \
     typing/printtyp.cmi \
+    typing/predef.cmi \
     parsing/pprintast.cmi \
     typing/path.cmi \
     utils/misc.cmi \
@@ -2398,6 +2399,7 @@ typing/vreplay_instrumentation.cmx : \
     typing/tast_mapper.cmx \
     typing/shape.cmx \
     typing/printtyp.cmx \
+    typing/predef.cmx \
     parsing/pprintast.cmx \
     typing/path.cmx \
     utils/misc.cmx \

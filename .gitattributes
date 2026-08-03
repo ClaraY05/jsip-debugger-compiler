@@ -32,6 +32,8 @@
 /testing/*.ml typo.missing-header=may
 /testing/*.sh typo.missing-header=may
 /testing/cases/*.ml typo.missing-header=may
+/testing/mock/*.ml typo.missing-header=may
+/testing/mock/*.mli typo.missing-header=may
 /testing/expected/*.dump typo.missing-header=may typo.long-line=may typo.very-long-line=may typo.missing-lf=may
 /.claude/* typo.missing-header=may
 /.gitignore typo.long-line=may

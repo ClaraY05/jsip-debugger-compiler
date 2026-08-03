@@ -39,6 +39,7 @@ TMP=$(mktemp -d) || exit 2
 cleanup() {
     rm -rf "$TMP"
     rm -f testing/cases/*.cmi testing/cases/*.cmo \
+        testing/mock/*.cmi testing/mock/*.cmo \
         testing/check_dump.cmi testing/check_dump.cmo
 }
 trap cleanup EXIT INT TERM
@@ -56,11 +57,33 @@ fi
 $OCAMLC vreplay/vreplay.cma -o "$TMP/check_dump" testing/check_dump.ml \
     || { echo "error: cannot build check_dump" >&2; exit 2; }
 
+# The Base/Core stand-ins: units named exactly as the real libraries'
+# are, holding the real representations, so the Core cases run here and
+# in CI with no opam switch and no Core installed (see testing/mock/).
+# Compiled as a library and never with -visual-replay -- real Base isn't
+# instrumented either -- so a case links only the units it names and
+# every event still comes from the case's own calls.  Listed in
+# dependency order, which is not alphabetical.
+mock_units="base__Hashtbl base__Hash_set base__Map base__Set \
+    base__Queue base__Stack base__Linked_queue core__Map core__Deque \
+    core__Fdeque core__Doubly_linked"
+mock_srcs=""
+for u in $mock_units; do
+    # a unit with an .mli hides its representation, as the library it
+    # stands in for does; pass it explicitly or ocamlc ignores it
+    if [ -f "testing/mock/$u.mli" ]; then
+        mock_srcs="$mock_srcs testing/mock/$u.mli"
+    fi
+    mock_srcs="$mock_srcs testing/mock/$u.ml"
+done
+$OCAMLC -a -I testing/mock -o "$TMP/mocks.cma" $mock_srcs \
+    || { echo "error: cannot build the Base/Core mocks" >&2; exit 2; }
+
 pass=0; failed=0
 for src in $cases; do
     name=$(basename "$src" .ml)
-    if ! $OCAMLC -visual-replay -o "$TMP/$name.exe" "$src" \
-        > "$TMP/$name.compile" 2>&1; then
+    if ! $OCAMLC -visual-replay -I testing/mock "$TMP/mocks.cma" \
+        -o "$TMP/$name.exe" "$src" > "$TMP/$name.compile" 2>&1; then
         echo "FAIL $name (compile)"; cat "$TMP/$name.compile"
         failed=$((failed + 1)); continue
     fi
