@@ -25,12 +25,16 @@
  *     | Int of int | Float of float | String of string
  *     | Int32 of int32 | Int64 of int64 | Nativeint of nativeint
  *     | Float_array of float list | Address of nativeint | Id of int
+ *     | Child
  *   type node  = { id : int; virtual_address : nativeint
  *                ; block : (string * block) list; children : node list }
  *   external traverse :
  *     Obj.t -> (Obj.t * int * string) array -> (Obj.t * int) array
  *     -> int * int
  *     -> (string array * int * int * bool) array
+ *        * (string array * int array * int) array
+ *        * int array array
+ *        * int
  *     -> node * (int * nativeint * string) array * (int * int) array
  *     = "caml_wire_traverse"
  * The DS type itself stays on the OCaml side ([Vreplay.t] pairs it with
@@ -57,24 +61,34 @@
  * re-reach the new blocks through Obj.field and remember them weakly
  * for later events' member tables.
  *
- * Given a [root] to walk, the tables above, and the DS's [layers]
+ * The last argument bundles what steers the walk: the DS's [layers]
  * (one flattened Data_structure.layer per entry: labels, interior mask,
- * payload mask, is_array -- see data_structure.mli), we BFS the
- * in-memory representation reachable from [root] and return it as a
- * tree of [node]s, each node pointing at its children.
+ * payload mask, is_array -- see data_structure.mli); the SCHEMA table
+ * describing user data, derived by the instrumentation from the
+ * program's own type declarations (labels, per-field entry, kind); per
+ * layer the schema entry each field's payload edge leads to; and the
+ * schema entry describing the root block itself, -1 for a container.
+ * Given those we BFS the representation reachable from [root] and
+ * return it as a tree of [node]s.
  *
- * Every BFS entry carries a MODE: interior (an index into [layers]) or
- * payload (user data).  The root starts at layer 0.  In an interior
- * cell, the layer's masks decide each field: interior fields step one
- * layer deeper (clamped to the last -- chains repeat it), payload
- * fields switch to payload mode, unmarked fields (bookkeeping) are
- * dropped.  An interior Fixed layer must match the cell's size exactly;
- * on a mismatch (our expectation diverged from the actual
- * representation) the cell is demoted to payload treatment rather than
- * truncated or mislabeled.  In a payload cell, EVERY field is kept,
- * labels are numeric, and children stay payload: user data is never
- * filtered by DS masks, whatever its arity.  A block's mode is fixed by
- * the first edge that discovers it.
+ * Every BFS entry carries a MODE: a layer index, MODE_PAYLOAD (user
+ * data nothing describes), or a schema entry (encoded below -1).  A
+ * container root starts at layer 0; a user-declared root starts at its
+ * own schema entry.  In an interior cell the layer's masks decide each
+ * field: interior fields step one layer deeper (clamped to the last --
+ * chains repeat it), payload fields take the schema for that slot's
+ * role if there is one and MODE_PAYLOAD otherwise, unmarked fields
+ * (bookkeeping) are dropped.  In a schema cell EVERY field is kept and
+ * takes its label and its child's entry from the schema -- an entry may
+ * point at ITSELF, which is how a list cell's tail terminates.  In a
+ * plain payload cell every field is kept with a numeric label.
+ *
+ * Both structural guards sit in FRONT of the schema: a Fixed layer or a
+ * schema entry whose size disagrees with the cell it landed on is
+ * demoted to payload treatment rather than truncated or mislabeled, and
+ * a non-walkable tag is never entered whatever any table claims.  A
+ * block's mode is fixed by the first edge that discovers it, and the
+ * walk stops queueing new cells at WALK_MAX_CELLS.
  *
  * A kept field becomes, per the rule:
  *
@@ -238,6 +252,13 @@ typedef struct {
 /* A queued block's mode: a layer index (>= 0) for the structure's own
  * skeleton, MODE_PAYLOAD for user data nothing describes, or a schema
  * entry, encoded below -1 so the two negative cases stay distinct. */
+/* An upper bound on the cells one walk may dump.  Containers were
+ * bounded in practice by their own layouts; a user-declared root is
+ * walked wherever its schema leads, so a big list or a wide graph
+ * needs a stop.  Blocks past the bound are recorded as opaque
+ * addresses, which says "something was here" without following it. */
+#define WALK_MAX_CELLS 4096
+
 #define MODE_PAYLOAD (-1L)
 #define SCHEMA_MODE(i)    (-2L - (long)(i))
 #define IS_SCHEMA_MODE(m) ((m) <= -2L)
@@ -762,6 +783,11 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
                             fl.k = F_ID;
                             fl.ival = (intnat)(idx == 0
                                           ? root_id : next_id + idx - 1);
+                        } else if (seen.len >= WALK_MAX_CELLS) {
+                            /* budget spent: name the field, but record
+                             * the block opaquely instead of walking it */
+                            fl.k = F_ADDR;
+                            fl.ptr = (uintnat)f;
                         } else {
                             idx = (long)seen.len;
                             vec_push(&seen, f);
@@ -776,6 +802,18 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
                 }
                 c.fields[c.nfields++] = fl;
             }
+        } else {
+            /* A non-walkable block only ever reaches the queue as the
+             * ROOT (as a field it would have been captured in place):
+             * a float array, an all-float record, a string.  Decode it
+             * as this node's sole entry -- emitting an empty node
+             * would lose the value entirely. */
+            cfield fl = {0};
+            fl.label = index_label(0);
+            capture_leaf(&fl, v);
+            c.fields = malloc(sizeof(cfield));
+            c.fields[0] = fl;
+            c.nfields = 1;
         }
 
         if (ncells == ccap) {
