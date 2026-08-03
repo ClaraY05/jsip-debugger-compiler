@@ -56,13 +56,21 @@ let from_sexp = Sexp.from_sexp
    first id for newly discovered cells); the result's third component
    is each new cell's discovery edge -- (parent cell index, raw field
    index), in discovery order -- which [absorb_members] uses to
-   re-reach the new blocks.  The last argument is the DS's layout, one
-   flattened [Data_structure.layer] per entry:
-   (labels, interior mask, payload mask, is_array). *)
+   re-reach the new blocks.
+
+   The last argument bundles everything that steers the walk -- one
+   argument, so the external stays within the five the direct calling
+   convention allows: the DS's layout, one flattened
+   [Data_structure.layer] per entry (labels, interior mask, payload
+   mask, is_array); the user-data schema table (labels, per-field
+   entry, kind); and per layer the schema entry each field's payload
+   edge leads to, -1 for none. *)
 external traverse :
   Obj.t -> (Obj.t * int * string) array -> (Obj.t * int) array
   -> int * int
   -> (string array * int * int * bool) array
+     * (string array * int array * int) array
+     * int array array
   -> node * (int * nativeint * string) array * (int * int) array
   = "caml_wire_traverse"
 
@@ -71,6 +79,33 @@ let flatten_layer : Data_structure.layer -> string array * int * int * bool
   | Data_structure.Fixed { labels; interior; payload } ->
     (Array.of_list labels, interior, payload, false)
   | Data_structure.Array_elements -> ([||], 0, 0, true)
+
+let flatten_schema (labels, fields, kind) =
+  (Array.of_list labels, Array.of_list fields, kind)
+
+(* Attach the roles the instrumentation resolved to the field positions
+   [Data_structure.payload_roles] names, giving the walker a per-field
+   lookup it can use without knowing anything about roles.  A role the
+   schema could not describe is simply absent and leaves -1. *)
+let payload_edges ds_ty roles =
+  let width (layer : Data_structure.layer) =
+    match layer with
+    | Data_structure.Fixed { labels; _ } -> List.length labels
+    | Data_structure.Array_elements -> 0
+  in
+  Array.of_list
+    (List.map2
+       (fun layer positions ->
+          let edges = Array.make (width layer) (-1) in
+          List.iter
+            (fun (i, role) ->
+               match List.assoc_opt role roles with
+               | Some entry when i < Array.length edges -> edges.(i) <- entry
+               | Some _ | None -> ())
+            positions;
+          edges)
+       (Data_structure.layout ds_ty)
+       (Data_structure.payload_roles ds_ty))
 
 (* Single write path shared with the instrumentation's {} frame markers:
    C-side fprintf+fflush.  Going through the same primitive keeps records
@@ -283,7 +318,7 @@ let emit_event ~loc ~fn ~args ~id ~registry ~ty snap =
   emit (Sexp.to_string line ^ "\n")
 
 (* ---- entry point injected at every event ---- *)
-let snapshot ~loc ~fn ~ds ~args ~name ~ty ~schema:_ root =
+let snapshot ~loc ~fn ~ds ~args ~name ~ty ~schema root =
   match Data_structure.of_module ds with
   | None -> ()                              (* not a tracked data structure *)
   | Some ds_ty ->
@@ -293,6 +328,11 @@ let snapshot ~loc ~fn ~ds ~args ~name ~ty ~schema:_ root =
       let layers =
         Array.of_list (List.map flatten_layer (Data_structure.layout ds_ty))
       in
+      let schema_entries, schema_roles = schema in
+      let schemas =
+        Array.of_list (List.map flatten_schema schema_entries)
+      in
+      let edges = payload_edges ds_ty schema_roles in
       let immutable = Data_structure.is_immutable ds_ty in
       let id, fresh = register r ~name in
       let root_id = Id.to_int id in
@@ -303,7 +343,7 @@ let snapshot ~loc ~fn ~ds ~args ~name ~ty ~schema:_ root =
       in
       let next_id = Id.next_int () in
       let root_node, registry, paths =
-        traverse r known members (root_id, next_id) layers
+        traverse r known members (root_id, next_id) (layers, schemas, edges)
       in
       (* the walker consumed one id per newly dumped cell *)
       Id.advance (Array.length paths);

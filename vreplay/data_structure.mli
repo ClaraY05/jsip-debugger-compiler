@@ -46,3 +46,13 @@ type layer =
    last layer repeats (an interior chain -- Map's l/r spine, a bucket
    list's next -- keeps its own layer forever). *)
 val layout : t -> layer list
+
+(* Which payload field of each layer carries which role of the event's
+   [ty] -- (field index, role name), one list per layer of [layout].
+   A map's node holds its key in [v] and its data in [d]; a queue cell
+   holds its element in field 0.  This is what lets a schema derived
+   from the key/data/elt TYPES attach to the right slots, so the walker
+   can label the user data below them instead of numbering it.  Payload
+   fields that are not user data (a queue's [length], a hashtable's
+   [size]) carry no role. *)
+val payload_roles : t -> (int * string) list list

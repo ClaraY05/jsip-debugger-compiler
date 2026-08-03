@@ -88,3 +88,14 @@ let layout = function
         ; interior = 0b100 (* next *)
         ; payload = 0b011 (* key, data *)
         } ]
+
+(* Positions must agree with [layout]'s payload masks above: a role
+   names a field the mask already keeps, so the schema for that role's
+   type describes exactly the block that field points at. *)
+let payload_roles = function
+  | Map -> [ [ (1, "key"); (2, "data") ] ]
+  | Set -> [ [ (1, "elt") ] ]
+  (* the root's [length] is a count, not user data *)
+  | Queue -> [ []; [ (0, "elt") ] ]
+  (* likewise the root's [size]; the bucket array has no payload *)
+  | Hashtbl -> [ []; []; [ (0, "key"); (1, "data") ] ]
