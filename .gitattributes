@@ -33,6 +33,9 @@
 /testing/*.sh typo.missing-header=may
 /testing/cases/*.ml typo.missing-header=may
 /testing/expected/*.dump typo.missing-header=may typo.long-line=may typo.very-long-line=may typo.missing-lf=may
+/.claude/* typo.missing-header=may
+/.gitignore typo.long-line=may
+/test_programs/* typo.missing-header=may typo.long-line=may typo.white-at-eol=may typo.white-at-eof=may
 
 # Binary files
 /boot/ocamlc binary

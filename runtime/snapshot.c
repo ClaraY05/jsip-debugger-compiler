@@ -746,7 +746,9 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
  * down with it.
  * ------------------------------------------------------------------ */
 static int wire_fd = -2;               /* -2 not yet chosen, -1 disabled */
-static int wire_fd_is_socket = 0;
+#ifndef _WIN32
+static int wire_fd_is_socket = 0;      /* only the POSIX path has sockets */
+#endif
 
 static void wire_disable(const char *what, const char *detail)
 {

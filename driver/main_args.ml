@@ -689,7 +689,7 @@ let mk_dsource f =
 let mk_dlambda f =
   "-dlambda", Arg.Unit f, " (undocumented)"
 
-let mk_visual_replay f = 
+let mk_visual_replay f =
   "-visual-replay", Arg.Unit f, " Render the txt file for JSIP debugger
    tool"
 

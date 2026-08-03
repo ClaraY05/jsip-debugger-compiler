@@ -152,14 +152,16 @@ extern "C"
 #define HEADER_COLOR_MASK (((1ull << HEADER_COLOR_BITS) - 1ull) \
                            << HEADER_COLOR_SHIFT)
 
-#define HEADER_WOSIZE_BITS (HEADER_BITS - HEADER_TAG_BITS - HEADER_COLOR_BITS - HEADER_RESERVED_BITS)
+#define HEADER_WOSIZE_BITS \
+  (HEADER_BITS - HEADER_TAG_BITS - HEADER_COLOR_BITS - HEADER_RESERVED_BITS)
 #define HEADER_WOSIZE_SHIFT (HEADER_COLOR_SHIFT + HEADER_COLOR_BITS)
 #define HEADER_WOSIZE_MASK (((1ull << HEADER_WOSIZE_BITS) - 1ull) \
                             << HEADER_WOSIZE_SHIFT)
 
 #define Tag_hd(hd) ((tag_t)((hd) & HEADER_TAG_MASK))
 #define Hd_with_tag(hd, tag) (((hd) & ~HEADER_TAG_MASK) | (tag))
-#define Wosize_hd(hd) ((mlsize_t)(((hd) & HEADER_WOSIZE_MASK) >> HEADER_WOSIZE_SHIFT))
+#define Wosize_hd(hd) \
+  ((mlsize_t)(((hd) & HEADER_WOSIZE_MASK) >> HEADER_WOSIZE_SHIFT))
 
 /* A "clean" header, without reserved or color bits. */
 #define Cleanhd_hd(hd) (((header_t)(hd)) & \
@@ -388,7 +390,8 @@ CAMLextern void caml_Store_double_val(value, double);
 
 /* The [_flat_field] macros are for [floatarray] values and float-only records.
  */
-#define Double_flat_field(v, i) Double_val((value)((volatile double *)(v) + (i)))
+#define Double_flat_field(v, i) \
+  Double_val((value)((volatile double *)(v) + (i)))
 #define Store_double_flat_field(v, i, d)                                   \
   do                                                                       \
   {                                                                        \
@@ -501,9 +504,11 @@ CAMLextern int64_t caml_Int64_val(value v);
 
   /* Header for out-of-heap blocks. */
 
-#define Caml_out_of_heap_header_with_reserved(wosize, tag, reserved)                                                                                     \
-  (                                                                                                             /*CAMLassert ((wosize) <= Max_wosize),*/ \
-   ((header_t)(Hd_reserved(reserved)) + ((header_t)(wosize) << HEADER_WOSIZE_SHIFT) + (3 << HEADER_COLOR_SHIFT) /* [NOT_MARKABLE] */                     \
+#define Caml_out_of_heap_header_with_reserved(wosize, tag, reserved)     \
+  (/*CAMLassert ((wosize) <= Max_wosize),*/                              \
+   ((header_t)(Hd_reserved(reserved))                                    \
+    + ((header_t)(wosize) << HEADER_WOSIZE_SHIFT)                        \
+    + (3 << HEADER_COLOR_SHIFT) /* [NOT_MARKABLE] */                     \
     + (tag_t)(tag)))
 
 #define Caml_out_of_heap_header(wosize, tag) \
