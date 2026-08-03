@@ -22,6 +22,18 @@
 
 .editorconfig typo.missing-header=may
 
+# Visual replay (this fork): fork-authored sources carry no OCaml
+# license header, and testing/expected holds byte-exact machine-written
+# dumps (one event per line; never reformat them)
+/runtime/snapshot.c typo.missing-header=may
+/vreplay/* typo.missing-header=may
+/typing/vreplay_instrumentation.ml typo.missing-header=may
+/typing/vreplay_instrumentation.mli typo.missing-header=may
+/testing/*.ml typo.missing-header=may
+/testing/*.sh typo.missing-header=may
+/testing/cases/*.ml typo.missing-header=may
+/testing/expected/*.dump typo.missing-header=may typo.long-line=may typo.very-long-line=may typo.missing-lf=may
+
 # Binary files
 /boot/ocamlc binary
 /boot/ocamllex binary
