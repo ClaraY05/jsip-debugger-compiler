@@ -65,13 +65,16 @@ let from_sexp = Sexp.from_sexp
    [Data_structure.layer] per entry (labels, interior mask, payload
    mask, is_array); the user-data schema table (labels, per-field
    entry, kind); and per layer the schema entry each field's payload
-   edge leads to, -1 for none. *)
+   edge leads to, -1 for none; and the schema entry describing the ROOT
+   block itself, -1 when it has none (every container -- their roots
+   are described by layer 0). *)
 external traverse :
   Obj.t -> (Obj.t * int * string) array -> (Obj.t * int) array
   -> int * int
   -> (string array * int * int * bool) array
      * (string array * int array * int) array
      * int array array
+     * int
   -> node * (int * nativeint * string) array * (int * int) array
   = "caml_wire_traverse"
 
@@ -334,6 +337,13 @@ let snapshot ~loc ~fn ~ds ~args ~name ~ty ~schema root =
         Array.of_list (List.map flatten_schema schema_entries)
       in
       let edges = payload_edges ds_ty schema_roles in
+      (* a user-declared root IS user data: it starts in schema mode
+         instead of at a layer *)
+      let root_entry =
+        match List.assoc_opt "self" schema_roles with
+        | Some entry -> entry
+        | None -> -1
+      in
       let immutable = Data_structure.is_immutable ds_ty in
       let id, fresh = register r ~name in
       let root_id = Id.to_int id in
@@ -344,7 +354,8 @@ let snapshot ~loc ~fn ~ds ~args ~name ~ty ~schema root =
       in
       let next_id = Id.next_int () in
       let root_node, registry, paths =
-        traverse r known members (root_id, next_id) (layers, schemas, edges)
+        traverse r known members (root_id, next_id)
+          (layers, schemas, edges, root_entry)
       in
       (* the walker consumed one id per newly dumped cell *)
       Id.advance (Array.length paths);

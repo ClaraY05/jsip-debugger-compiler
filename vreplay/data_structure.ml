@@ -1,12 +1,13 @@
 (* The catalogue of data structures visual replay knows how to walk. *)
 
-type t = Map | Set | Queue | Hashtbl
+type t = Map | Set | Queue | Hashtbl | User
 
 let to_string = function
   | Map -> "Map"
   | Set -> "Set"
   | Queue -> "Queue"
   | Hashtbl -> "Hashtbl"
+  | User -> "User"
 
 (* The DS name the instrumentation passes at each event ([ds_table] in
    typing/vreplay_instrumentation.ml -- it may list units that have no
@@ -16,6 +17,7 @@ let of_module = function
   | "Set" -> Some Set
   | "Queue" -> Some Queue
   | "Hashtbl" -> Some Hashtbl
+  | "User" -> Some User
   | _ -> None
 
 (* Map and Set values never change after creation (operations build new
@@ -25,7 +27,7 @@ let of_module = function
    place and are re-walked in full at every event instead. *)
 let is_immutable = function
   | Map | Set -> true
-  | Queue | Hashtbl -> false
+  | Queue | Hashtbl | User -> false
 
 type layer =
   | Fixed of
@@ -37,6 +39,10 @@ type layer =
 
 (* Bit i of a mask covers field i of the node the layer describes. *)
 let layout = function
+  (* a user-declared type has no hand-written skeleton: its root block
+     is described by the schema the instrumentation derived, so the
+     walk starts in schema mode and there are no layers at all *)
+  | User -> []
   (* stdlib Map: every internal node is  Node {l; v; d; r; h}  (Empty is
      the int 0), and l/r lead to nodes of the same shape -- one layer,
      repeating.  The AVL height [h] is bookkeeping. *)
@@ -93,6 +99,7 @@ let layout = function
    names a field the mask already keeps, so the schema for that role's
    type describes exactly the block that field points at. *)
 let payload_roles = function
+  | User -> []
   | Map -> [ [ (1, "key"); (2, "data") ] ]
   | Set -> [ [ (1, "elt") ] ]
   (* the root's [length] is a count, not user data *)

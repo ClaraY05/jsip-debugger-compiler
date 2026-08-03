@@ -641,6 +641,7 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
     clayer *layers = layers_of_value(Field(v_layout, 0), &nlayers);
     cschema *schemas = schemas_of_value(Field(v_layout, 1), &nschemas);
     cedges *edges = edges_of_value(Field(v_layout, 2), &nedges);
+    long root_entry = (long)Long_val(Field(v_layout, 3));
     vec seen = {0};
     lvec modes = {0};
     itab seen_tab = {0};
@@ -653,8 +654,12 @@ CAMLprim value caml_wire_traverse(value v_root, value v_known,
      * Entry 0 (the root) is a placeholder. */
     lvec par_parent = {0}, par_field = {0};
 
-    vec_push(&seen, v_root);   /* root is cell 0, at the first layer */
-    lvec_push(&modes, nlayers ? 0 : MODE_PAYLOAD);
+    /* root is cell 0: at the first layer for a container, or in schema
+     * mode when the root block is itself user-declared data */
+    vec_push(&seen, v_root);
+    lvec_push(&modes,
+              root_entry >= 0 ? SCHEMA_MODE(root_entry)
+                              : (nlayers ? 0 : MODE_PAYLOAD));
     lvec_push(&par_parent, -1);
     lvec_push(&par_field, -1);
     itab_put(&seen_tab, (uintnat)v_root, 0);

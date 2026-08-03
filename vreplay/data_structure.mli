@@ -2,7 +2,10 @@
    typing/vreplay_instrumentation.ml mirrors these names in [ds_table];
    extend both together when adding a data structure. *)
 
-type t = Map | Set | Queue | Hashtbl
+(* [User] is not a container: it is any type the user's own program
+   declared, whose shape comes from the schema the instrumentation
+   derived rather than from a hand-written layout here. *)
+type t = Map | Set | Queue | Hashtbl | User
 
 val to_string : t -> string
 
@@ -42,9 +45,10 @@ type layer =
   | Array_elements
 
 (* The layers of one DS, root first, in the order interior edges meet
-   them.  Nonempty; once the walk has stepped past the last layer, the
-   last layer repeats (an interior chain -- Map's l/r spine, a bucket
-   list's next -- keeps its own layer forever). *)
+   them.  Once the walk has stepped past the last layer, the last layer
+   repeats (an interior chain -- Map's l/r spine, a bucket list's next
+   -- keeps its own layer forever).  Empty only for [User], which has
+   no skeleton of its own to describe. *)
 val layout : t -> layer list
 
 (* Which payload field of each layer carries which role of the event's

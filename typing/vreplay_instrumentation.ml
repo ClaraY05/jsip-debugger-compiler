@@ -12,16 +12,28 @@ module Wire = struct
       ; argument_list: (string * string * string) list
   }
 
+  let location_of (exp : Typedtree.expression) =
+    let start = exp.exp_loc.Location.loc_start in
+    let stop = exp.exp_loc.Location.loc_end in
+    ( start.Lexing.pos_fname
+    , start.Lexing.pos_lnum
+    , start.Lexing.pos_cnum - start.Lexing.pos_bol
+    , stop.Lexing.pos_cnum - stop.Lexing.pos_bol )
+
+  (* A [let] binding observed for its own sake.  There is no function
+     here, so the bound expression's own source text stands in for one
+     and the argument list is empty. *)
+  let format_binding (exp : Typedtree.expression) =
+    { location = location_of exp
+    ; function_info =
+        ( "Unnamed"
+        , Format.asprintf "%a" Pprintast.expression
+            (Untypeast.untype_expression exp) )
+    ; argument_list = [] }
+
   let format_function_call
         (exp : Typedtree.expression) (func : Typedtree.expression) args =
-    let location =
-      let start = exp.exp_loc.Location.loc_start in
-      let stop = exp.exp_loc.Location.loc_end in
-      ( start.Lexing.pos_fname
-      , start.Lexing.pos_lnum
-      , start.Lexing.pos_cnum - start.Lexing.pos_bol
-      , stop.Lexing.pos_cnum - stop.Lexing.pos_bol )
-    in
+    let location = location_of exp in
     let function_info =
       match func.exp_desc with
       | Texp_ident (_, lid, _) ->
@@ -374,21 +386,63 @@ let rec describe_type env tbl ty =
     | Types.Tunivar _ | Types.Tpoly _ | Types.Tpackage _
     | Types.Tfunctor _ -> no_schema
 
-(* The payload schemas a root of kind [ds] can reach: one shared table
-   plus the entry each role of [type_params] resolves to.  A role the
-   schema cannot describe is omitted, exactly as an unresolved role is
-   omitted from [ty]. *)
+(* The DS name a value observed for its own sake travels under: not a
+   container, so [Data_structure] gives it no layout and the walk is
+   steered entirely by its schema. *)
+let user_ds = "User"
+
+(* The schemas a root of kind [ds] can reach: one shared table plus the
+   entry each role resolves to.  A container's roles are the ones
+   [type_params] labels and describe its PAYLOAD; a user-declared root
+   is itself the user data, so it takes the single role [self] and the
+   walk starts there.  A role the schema cannot describe is omitted,
+   exactly as an unresolved role is omitted from [ty]. *)
 let root_schema ~ds (e : Typedtree.expression) =
   let env = e.exp_env in
   let tbl = new_schema_tbl () in
   let roles =
-    List.filter_map
-      (fun (role, t) ->
-         let i = describe_type env tbl t in
-         if i = no_schema then None else Some (role, i))
-      (role_types env ~ds e.exp_type)
+    if String.equal ds user_ds then begin
+      let i = describe_type env tbl e.exp_type in
+      if i = no_schema then [] else [ ("self", i) ]
+    end
+    else
+      List.filter_map
+        (fun (role, t) ->
+           let i = describe_type env tbl t in
+           if i = no_schema then None else Some (role, i))
+        (role_types env ~ds e.exp_type)
   in
   (schema_entries tbl, roles)
+
+(* [Stdlib__Map] and friends declare library types, not the program's
+   own.  Predef types ([list], [array], [int]) never reach this test --
+   [uid_comp_unit] already fails closed on them, which is what keeps a
+   bare [let xs = [1; 2; 3]] from becoming an event. *)
+let is_stdlib_unit unit =
+  let p = "Stdlib" in
+  String.length unit >= String.length p
+  && String.equal (String.sub unit 0 (String.length p)) p
+
+(* [e]'s head type constructor was declared by the program itself.
+   Read WITHOUT [Ctype.expand_head]: expanding follows an alias like
+   [type trades = trade list] down to the predef [list] and would
+   reject exactly the declarations worth observing.  A bare tuple is
+   not a [Tconstr] at all, so it never qualifies either. *)
+let is_user_declared (e : Typedtree.expression) =
+  match Types.get_desc e.exp_type with
+  | Types.Tconstr (path, _, _) ->
+    begin match Env.find_type path e.exp_env with
+    | decl ->
+      begin match uid_comp_unit decl.type_uid with
+      | Some unit -> not (is_stdlib_unit unit)
+      | None -> false
+      end
+    | exception Not_found -> false
+    end
+  | Types.Tvar _ | Types.Tarrow _ | Types.Ttuple _ | Types.Tobject _
+  | Types.Tfield _ | Types.Tnil | Types.Tlink _ | Types.Tsubst _
+  | Types.Tvariant _ | Types.Tunivar _ | Types.Tpoly _
+  | Types.Tpackage _ | Types.Tfunctor _ -> false
 
 (* ---- the injected observation ---- *)
 
@@ -591,8 +645,40 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
       | Tpat_var (_, { txt; _ }, _) -> Some (txt, vb.vb_expr)
       | _ -> None
     in
-    Misc.protect_refs [ Misc.R (current_binder, binder) ]
-      (fun () -> super.value_binding self vb)
+    let vb =
+      Misc.protect_refs [ Misc.R (current_binder, binder) ]
+        (fun () -> super.value_binding self vb)
+    in
+    (* A value of the program's OWN type is worth observing for its own
+       sake -- this is what makes [let p = { x = 3; y = 4 }] an event
+       where nothing but container calls used to be one.  Only when the
+       schema can actually describe it: an undescribable type (a
+       variant, an abstract one) would dump an unlabelled block, which
+       is no better than the numbering this replaces. *)
+    match binder with
+    | Some (name, _) when is_user_declared vb.vb_expr ->
+      let ((_ : schema_entry list), roles) as schema =
+        root_schema ~ds:user_ds vb.vb_expr
+      in
+      begin match roles with
+      | [] -> vb
+      | _ :: _ ->
+        let wire = Wire.format_binding vb.vb_expr in
+        let ty = root_ty ~ds:user_ds vb.vb_expr in
+        let hooks =
+          [ (fun env ->
+               snapshot_call env ~loc:wire.Wire.location
+                 ~fn:wire.Wire.function_info ~ds:user_ds
+                 ~args:wire.Wire.argument_list ~name ~ty ~schema
+                 ~root:(Longident.Lident res_binder_name)) ]
+        in
+        { vb with
+          vb_expr =
+            { vb.vb_expr with
+              exp_desc =
+                instrument_call vb.vb_expr ~emit ~inject_after:hooks } }
+      end
+    | Some _ | None -> vb
   in
 
   let inject_expression self (exp : Typedtree.expression) =
