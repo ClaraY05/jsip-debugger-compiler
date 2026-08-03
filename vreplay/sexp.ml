@@ -230,6 +230,17 @@ let sexp_of_registry reg =
   in
   List (Array.to_list reg |> List.map entry)
 
+(* Event-level: the static type of the walked root, computed by the
+   instrumentation off the typedtree -- its printed form plus the
+   role-labelled parameters a reader shows without parsing OCaml type
+   syntax ([key]/[data] for a map or hashtable, [elt] for a set or
+   queue).  [params] is empty when a role could not be resolved. *)
+let sexp_of_ty (printed, params) =
+  let param (role, t) = List [ Atom role; Atom t ] in
+  List
+    [ List [ Atom "printed"; Atom printed ]
+    ; List [ Atom "params"; List (List.map param params) ] ]
+
 (* Event-level: the call site, in the shape [@@deriving sexp] gives the
    interface's Location.t record
    {file_path : string; line_number : int; char_range : int * int}. *)

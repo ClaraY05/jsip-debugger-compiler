@@ -147,10 +147,11 @@ let live_known () =
   end;
   Array.of_list (List.rev !trips)
 
-(* One event, one line: call metadata, the live registry, then the
-   [to_sexp] payload.  The {} depth markers around the line belong to the
-   instrumentation, the terminating newline to us. *)
-let emit_event ~loc ~fn ~args ~id ~registry snap =
+(* One event, one line: call metadata, the live registry, the root's
+   static type, then the [to_sexp] payload.  The {} depth markers around
+   the line belong to the instrumentation, the terminating newline to
+   us. *)
+let emit_event ~loc ~fn ~args ~id ~registry ~ty snap =
   let line =
     Sexp.List
       [ Sexp.Atom "event"
@@ -159,23 +160,24 @@ let emit_event ~loc ~fn ~args ~id ~registry snap =
       ; Sexp.List [ Sexp.Atom "fn"; Sexp.sexp_of_fn fn ]
       ; Sexp.List [ Sexp.Atom "args"; Sexp.sexp_of_args args ]
       ; Sexp.List [ Sexp.Atom "registry"; Sexp.sexp_of_registry registry ]
+      ; Sexp.List [ Sexp.Atom "ty"; Sexp.sexp_of_ty ty ]
       ; Sexp.List [ Sexp.Atom "snapshot"; to_sexp snap ] ]
   in
   emit (Sexp.to_string line ^ "\n")
 
 (* ---- entry point injected at every event ---- *)
-let snapshot ~loc ~fn ~ds ~args ~name root =
+let snapshot ~loc ~fn ~ds ~args ~name ~ty root =
   match Data_structure.of_module ds with
   | None -> ()                              (* not a tracked data structure *)
-  | Some ty ->
+  | Some ds_ty ->
     let r = Obj.repr root in
     if not (Obj.is_block r) then ()          (* immediates have no identity *)
     else begin
       let layers =
-        Array.of_list (List.map flatten_layer (Data_structure.layout ty))
+        Array.of_list (List.map flatten_layer (Data_structure.layout ds_ty))
       in
       let id = register r ~name in
       let root_node, registry = traverse r (live_known ()) layers in
-      emit_event ~loc ~fn ~args ~id:(Id.to_int id) ~registry
-        { ds_type = ty; root_node }
+      emit_event ~loc ~fn ~args ~id:(Id.to_int id) ~registry ~ty
+        { ds_type = ds_ty; root_node }
     end

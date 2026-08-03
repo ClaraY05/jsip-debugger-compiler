@@ -100,6 +100,18 @@ val from_sexp : t -> snapshot
    first tracked and disappear once the GC has collected it. *)
 val sexp_of_registry : (int * nativeint * string) array -> t
 
+(* The static type of the walked root, as the instrumentation printed it
+   off the typedtree:
+
+     (ty ((printed "int M.t") (params ((key string) (data int)))))
+
+   [printed] is the root's type as inferred at the call site (aliases
+   kept).  [params] labels the types a reader displays without parsing
+   OCaml syntax -- [key]/[data] for maps and hashtables, [elt] for sets
+   and queues -- and omits any role the instrumentation could not
+   resolve (e.g. the structure's module is a functor parameter). *)
+val sexp_of_ty : string * (string * string) list -> t
+
 (* The remaining event-wrapper fields, rendered in the shapes
    [@@deriving sexp] gives the interface repo's own types so its reader
    is derived, not hand-written:

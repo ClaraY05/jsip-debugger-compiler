@@ -2376,8 +2376,10 @@ typing/vreplay_instrumentation.cmo : \
     typing/typecore.cmi \
     typing/tast_mapper.cmi \
     typing/shape.cmi \
+    typing/printtyp.cmi \
     parsing/pprintast.cmi \
     typing/path.cmi \
+    utils/misc.cmi \
     parsing/longident.cmi \
     parsing/location.cmi \
     typing/ident.cmi \
@@ -2395,8 +2397,10 @@ typing/vreplay_instrumentation.cmx : \
     typing/typecore.cmx \
     typing/tast_mapper.cmx \
     typing/shape.cmx \
+    typing/printtyp.cmx \
     parsing/pprintast.cmx \
     typing/path.cmx \
+    utils/misc.cmx \
     parsing/longident.cmx \
     parsing/location.cmx \
     typing/ident.cmx \
@@ -2675,8 +2679,6 @@ bytecomp/opcodes.cmo : \
 bytecomp/opcodes.cmx : \
     bytecomp/opcodes.cmi
 bytecomp/opcodes.cmi :
-bytecomp/opnames.cmo :
-bytecomp/opnames.cmx :
 bytecomp/printinstr.cmo : \
     lambda/printlambda.cmi \
     parsing/location.cmi \
