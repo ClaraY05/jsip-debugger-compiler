@@ -292,7 +292,7 @@ let from_sexp = function
   | List
       [ List [ Atom "ds_type"; Atom ds ]
       ; List [ Atom "root_node"; root ] ] ->
-    (match Data_structure.of_module ds with
+    (match Data_structure.of_name ds with
      | Some ds_type -> { ds_type; root_node = node_from_sexp root }
      | None -> failwith "Sexp.from_sexp: unknown ds_type")
   | _ -> failwith "Sexp.from_sexp: bad record"
