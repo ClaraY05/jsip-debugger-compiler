@@ -5,10 +5,11 @@
 A **fork of the OCaml compiler** carrying one feature: a `-visual-replay`
 flag that injects instrumentation into an arbitrary OCaml program at the
 **Typedtree** layer, so that running the compiled program dumps one sexp
-event per observed value — each call on a catalogued container
-(`Map`/`Set`/`Queue`/`Hashtbl`) and each `let` of a value of the program's
-own declared types — carrying a walked snapshot of that value's in-memory
-shape. See "What is tracked" for the exact rules.
+event per observed value — each call on a catalogued container (the stdlib's
+`Map`/`Set`/`Queue`/`Hashtbl`/`Stack`/`Dynarray` and Base/Core's
+equivalents) and each `let` of a value of the program's own declared types —
+carrying a walked snapshot of that value's in-memory shape. See "What is
+tracked" for the exact rules.
 
 The tree sits on an **OCaml 5.5 base** — `VERSION` is `5.5.1+dev0-2026-06-19`
 and the upstream commit under all project work is **`466e585663`**. It did
@@ -279,6 +280,16 @@ are canonicalized for the comparison only, so goldens stay verbatim run
 output and double as the interface repo's parser fixtures. `testing/README.md`
 lists what the cases cover.
 
+**`testing/mock/` is how the Base/Core cases run at all.** This tree has no
+opam switch and no Core installed, so the suite compiles miniature stand-ins
+that reuse the *real unit names and representations*
+(`base__Map.ml`, `core__Deque.ml`, …) into a `mocks.cma` and compiles the
+`core_*` cases against it. That is enough to exercise `ds_table`'s
+provenance matching and the walker's layouts in CI. It is not enough to
+prove anything about the genuine Core layouts — for that, use the
+`jsip-vreplay` switch below. When you add a Core entry, add its mock unit
+and its case together.
+
 The upstream testsuite has **no** `-visual-replay` coverage:
 
 ```sh
@@ -292,8 +303,9 @@ make -C testsuite one DIR=tests/<area>      # one directory
 Base/Core/ppx_jane built against it (matching CMI magic by construction), so
 `ocamlc -visual-replay` works as an ordinary installed compiler on real
 Core-using programs. Bytecode-only by design. It takes ~1h to build; it is
-the only way to exercise the Core data-structure work (PR #13) against real
-Core. Needs at least `b3dd6d23a1` on the branch.
+the only way to check the Core catalogue entries against *real* Core layouts
+rather than `testing/mock/`'s stand-ins. Needs at least `b3dd6d23a1` on the
+branch.
 
 ---
 
@@ -308,8 +320,9 @@ Both sides derive from this one schema — no string parsing remains anywhere
 — but **the interface trails the compiler by design**: a structure lands
 here first, and the interface has to grow the matching `Ds_type`
 constructor before it can read the newer dumps. As of 2026-08-03 its `main`
-handles `Map`/`Set`/`Queue` while this repo also emits `Hashtbl` and `User`.
-Assume a freshly vendored dump needs interface work, not that it is broken.
+handles `Map`/`Set`/`Queue` while this repo emits fifteen `ds_type` names
+(the six stdlib containers, eight Core/Base ones, and `User`). Assume a
+freshly vendored dump needs interface work, not that it is broken.
 
 Every event is one line:
 
@@ -372,14 +385,29 @@ Two different things produce events, and they are classified in different
 places.
 
 **1. Catalogued container calls.** `ds_table` in
-`typing/vreplay_instrumentation.ml` and the catalogue in
-`vreplay/data_structure.mli` must be extended **together** — listing a
-module without a layout emits markers with no record.
+`typing/vreplay_instrumentation.ml` maps a *declaring compilation unit* to
+`(mutability, catalogue names)`; `vreplay/data_structure.mli` holds the
+layouts. **Extend both together** — a unit named without a layout no-ops at
+runtime, and a layout nothing maps to is dead.
 
-| Tracked today | Root |
-|---|---|
-| `Stdlib__Map`, `Stdlib__Set` | immutable — the result |
-| `Stdlib__Queue`, `Stdlib__Hashtbl` | mutable — each structure-typed argument, read post-call (so `pop`/`peek` fire by design) |
+| Catalogue entry | Declaring units | Root |
+|---|---|---|
+| `Map`, `Set` | `Stdlib__Map`, `Stdlib__Set` | immutable — the result |
+| `Queue`, `Hashtbl`, `Stack`, `Dynarray` | the matching `Stdlib__*` | mutable — each structure-typed argument, read post-call (so `pop`/`peek` fire by design) |
+| `Core_map`, `Core_set` | `Base__Map`, `Core__Map`, their `*_intf`, likewise for Set | immutable |
+| `Core_hashtbl`, `Core_hash_set`, `Core_queue`, `Core_stack`, `Core_deque`, `Core_fdeque`, `Core_doubly_linked` | the matching `Base__*` / `Core__*` and their `*_intf` | mutable (`Core_fdeque` immutable) |
+
+Two rules worth internalizing:
+
+- **One catalogue entry per *representation*, not per module.** `Core.Map.t`
+  is an alias of `Base.Map.t`, and `Map.Poly`, `Int.Map` and every `Make`
+  instance are that same type, so one entry covers them all. Conversely
+  `Core.Linked_queue` *is* `Stdlib.Queue.t`, so it belongs to `Queue` — which
+  is why a unit maps to a *list* of names (`Base__Queue` → `Core_queue`,
+  `Queue`).
+- **The `*_intf` units matter.** Base/Core declare their types in
+  `Base__Map_intf` rather than `Base__Map`, so omitting the `_intf` entry
+  silently tracks nothing.
 
 Classification is by **provenance**, not by name: an application is an event
 iff its function *and* its result type's head constructor were declared in a
@@ -387,8 +415,7 @@ unit listed in `ds_table`, read off `val_uid`/`type_uid`, which survives
 `Map.Make` application, `open`, `include` and aliasing. Functor parameters
 and first-class modules fail closed.
 
-`Stack`, `Dynarray`, and the Base/Core containers are the subject of open
-PR #13.
+`list`/`array` have predef type constructors and stay uncovered, on purpose.
 
 **2. Values of the program's own types** (`ds_type User`). A `let` whose
 bound expression's head type constructor was declared outside the stdlib is
