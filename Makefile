@@ -919,7 +919,11 @@ vreplay/vreplay.cmxa: vreplay/data_structure.cmx vreplay/sexp.cmx \
 # The library's artefacts are gitignored, so a distclean that left them
 # behind fails CI's "tree is clean after distclean" check.
 partialclean::
-	rm -f vreplay/*.cm* vreplay/*.$(O) vreplay/*.$(A)
+# literal extensions, not $(O)/$(A): Makefile.config is deliberately not
+# included for clean targets (Makefile.config_if_required), so those
+# variables are empty here
+	rm -f vreplay/*.cm* vreplay/*.o vreplay/*.obj vreplay/*.a \
+	  vreplay/*.lib
 
 # Bootstrap and rebuild the whole system.
 # The compilation of ocaml will fail if the runtime has changed.
