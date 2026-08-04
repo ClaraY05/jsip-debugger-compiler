@@ -89,7 +89,6 @@
   linkdeps
   stable_matching
   ;; PARSING
-  snapshot
   location
   longident
   docstrings

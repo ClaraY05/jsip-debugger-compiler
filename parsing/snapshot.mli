@@ -1,1 +1,0 @@
-val emit : string -> unit

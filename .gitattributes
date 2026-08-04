@@ -25,7 +25,6 @@
 # Visual replay (this fork): fork-authored sources carry no OCaml
 # license header, and testing/expected holds byte-exact machine-written
 # dumps (one event per line; never reformat them)
-/runtime/snapshot.c typo.missing-header=may
 /vreplay/* typo.missing-header=may
 /typing/vreplay_instrumentation.ml typo.missing-header=may
 /typing/vreplay_instrumentation.mli typo.missing-header=may

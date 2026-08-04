@@ -76,8 +76,10 @@ cd ../test/core_test
 eval $(opam env --switch=jsip-vreplay)
 dune build --profile vreplay     # profile adds -visual-replay (see its dune file)
 VREPLAY_FILE=/tmp/core.dump ./_build/default/main.exe
-# (profiles share _build/default; the binary is bytecode with the vreplay
-#  runtime linked in -- `strings ... | grep caml_wire_emit` proves it)
+# (profiles share _build/default; the binary is bytecode that requires the
+#  wire primitives -- `strings ... | grep caml_wire_emit` shows them in its
+#  primitive table; they resolve at startup from the switch's
+#  `stublibs/dllvreplaybyt-*`, installed with the compiler)
 ```
 
 Expectations, so nobody debugs a non-bug:
