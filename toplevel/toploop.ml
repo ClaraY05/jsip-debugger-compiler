@@ -420,6 +420,13 @@ let loop ppf =
 let preload_objects = ref []
 
 let prepare ppf ?input () =
+  (* -visual-replay only instruments batch compilation (the mapper runs
+     in Compile_common, which toplevel phrases never reach), so say so
+     instead of silently doing nothing. *)
+  if !Clflags.visual_replay then
+    Format.eprintf
+      "Warning: -visual-replay is ignored in the toplevel; it only \
+       takes effect under ocamlc/ocamlopt.@.";
   let dir =
     Option.map (fun inp -> Filename.dirname (filename_of_input inp)) input in
   Topcommon.set_paths ?dir ();

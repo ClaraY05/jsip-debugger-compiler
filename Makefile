@@ -791,6 +791,7 @@ opt: checknative
 	$(MAKE) ocamlopt
 	$(MAKE) libraryopt
 	$(MAKE) otherlibrariesopt ocamltoolsopt
+	$(MAKE) vreplay.opt
 
 # Native-code versions of the tools
 .PHONY: opt.opt
@@ -892,10 +893,33 @@ vreplay/vreplay.cma: vreplay/data_structure.cmo vreplay/sexp.cmo \
     vreplay/vreplay.cmo ocamlc
 	$(VREPLAY_OCAMLC) -a -o $@ vreplay/data_structure.cmo \
 	    vreplay/sexp.cmo vreplay/vreplay.cmo
+# Native variant, consumed by asmcomp/asmlink.ml under -visual-replay.
+# The .cmx rules reuse the .cmi files produced by the bytecode rules above,
+# so both variants share one set of interfaces.  ./ocamlopt is itself a
+# bytecode executable, hence $(NEW_OCAMLRUN).  The .cmx-on-.cmx
+# dependencies matter: ocamlopt reads them for cross-module inlining.
+VREPLAY_OCAMLOPT = $(NEW_OCAMLRUN) ./ocamlopt -g -nostdlib -I stdlib \
+  -I vreplay
+.PHONY: vreplay.opt
+vreplay.opt: vreplay/vreplay.cmxa
+vreplay/data_structure.cmx: vreplay/data_structure.ml \
+    vreplay/data_structure.cmi ocamlopt stdlib/stdlib.cmxa
+	$(VREPLAY_OCAMLOPT) -c vreplay/data_structure.ml
+vreplay/sexp.cmx: vreplay/sexp.ml vreplay/sexp.cmi \
+    vreplay/data_structure.cmx ocamlopt stdlib/stdlib.cmxa
+	$(VREPLAY_OCAMLOPT) -c vreplay/sexp.ml
+vreplay/vreplay.cmx: vreplay/vreplay.ml vreplay/vreplay.cmi \
+    vreplay/data_structure.cmx vreplay/sexp.cmx ocamlopt \
+    stdlib/stdlib.cmxa
+	$(VREPLAY_OCAMLOPT) -c vreplay/vreplay.ml
+vreplay/vreplay.cmxa: vreplay/data_structure.cmx vreplay/sexp.cmx \
+    vreplay/vreplay.cmx ocamlopt
+	$(VREPLAY_OCAMLOPT) -a -o $@ vreplay/data_structure.cmx \
+	    vreplay/sexp.cmx vreplay/vreplay.cmx
 # The library's artefacts are gitignored, so a distclean that left them
 # behind fails CI's "tree is clean after distclean" check.
 partialclean::
-	rm -f vreplay/*.cm*
+	rm -f vreplay/*.cm* vreplay/*.$(O) vreplay/*.$(A)
 
 # Bootstrap and rebuild the whole system.
 # The compilation of ocaml will fail if the runtime has changed.
@@ -921,6 +945,7 @@ world.opt: checknative
 # vreplay must track every rebuild: a stale vreplay.cma breaks the typing
 # of code injected under -visual-replay (the [all] target already has it)
 	$(MAKE) vreplay
+	$(MAKE) vreplay.opt
 
 # FlexDLL sources missing error messages
 # Different git mechanism displayed depending on whether this source tree came
@@ -2920,6 +2945,14 @@ common-install::
 	  vreplay/data_structure.cmi vreplay/data_structure.mli \
 	  vreplay/sexp.cmi vreplay/sexp.mli \
 	  vreplay/vreplay.cmi vreplay/vreplay.mli vreplay/vreplay.cma, \
+	  lib, vreplay)
+
+# Its native variant, for asmlink's vreplay.cmxa (the .cmx files ride
+# along so ocamlopt can inline across the library boundary)
+full-installopt native-install::
+	$(call INSTALL_ITEMS, \
+	  vreplay/data_structure.cmx vreplay/sexp.cmx vreplay/vreplay.cmx \
+	  vreplay/vreplay.cmxa vreplay/vreplay.$(A), \
 	  lib, vreplay)
 
 define INSTALL_ONE_NAT_TOOL

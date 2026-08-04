@@ -939,7 +939,6 @@ module type Compiler_options = sig
   val _dprofile : unit -> unit
   val _dump_into_file : unit -> unit
   val _dump_dir : string -> unit
-  val _visual_replay : unit -> unit
 
   val _args: string -> string array
   val _args0: string -> string array
@@ -1708,9 +1707,9 @@ module Default = struct
     let _strict_formats = set strict_formats
     let _strict_sequence = set strict_sequence
     let _unboxed_types = set unboxed_types
+    let _visual_replay = set visual_replay
     let _w s =
       Warnings.parse_options false s |> Option.iter Location.(prerr_alert none)
-    let _visual_replay = set visual_replay
 
     let anonymous = Compenv.anonymous
 
@@ -1722,7 +1721,6 @@ module Default = struct
     let _H dir = hidden_include_dirs := dir :: (!hidden_include_dirs)
     let _color = Misc.set_or_ignore color_reader.parse color
     let _dlambda = set dump_lambda
-    let _visual_replay = set visual_replay
     let _dparsetree = set dump_parsetree
     let _dparsetree_loc_ghost_invariants = set parsetree_ghost_loc_invariant
     let _drawlambda = set dump_rawlambda
