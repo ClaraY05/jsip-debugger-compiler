@@ -57,7 +57,7 @@ lost. (Line numbers drift; the symbol names don't.)
 | `driver/compile_common.ml:97` | The hookpoint — one line, pipes the typed AST through the mapper. |
 | `runtime/snapshot.c` | Defines `caml_wire_emit` (writes to the dump sink; framing is the OCaml side's job) and `caml_wire_traverse`, the no-allocation BFS walker that builds each event's `node` tree. |
 | `vreplay/` | **The runtime library** linked into instrumented programs: `data_structure.{ml,mli}` (the catalogue: which DSs are walkable and their per-layer interior/payload layouts), `sexp.{ml,mli}` (sexp AST + printer/parser + **the wire schema** + `to_sexp`/`from_sexp`), `vreplay.{ml,mli}` (weak registry, dump sink, and `snapshot`, the injected entry point). Built by `make vreplay` (part of `world`) into `vreplay/vreplay.cma`. |
-| `bytecomp/bytelink.ml:935`, `driver/compmisc.ml:48` | Flag-gated linking: `vreplay.cma` is prepended after `stdlib.cma`, and `+vreplay` joins the load path, only under `-visual-replay`. |
+| `bytecomp/bytelink.ml:935`, `asmcomp/asmlink.ml:349`, `driver/compmisc.ml:48` | Flag-gated linking: `vreplay.cma` / `vreplay.cmxa` is prepended after the stdlib archive, and `+vreplay` joins the load path, only under `-visual-replay`. |
 | `utils/clflags.ml:253`, `.mli:221` | `let visual_replay = ref false` |
 | `driver/main_args.ml:692` + 5 module lists | `-visual-replay` flag wiring. |
 | `Makefile:92`, `:172`, `:872`, `:1299` | Build wiring; `:872` is the `vreplay` library target, `:1299` puts `snapshot` in `runtime_COMMON_C_SOURCES`. |
@@ -91,10 +91,12 @@ Then:
 make -j4 world         # full/incremental build (bytecode). This machine has 4 cores.
 ```
 
-- **Bytecode only.** Native has never built in this tree — there is no
-  `ocamlopt` and no `ocamlc.opt`, and `-visual-replay` only links its
-  runtime into bytecode executables anyway. Use `make world`, **not**
-  `make world.opt`.
+- **Native is supported too.** `make world` is bytecode only; a follow-up
+  `make -j4 opt` adds `ocamlopt`, the native runtime/libraries, and
+  `vreplay/vreplay.cmxa`, after which `-visual-replay` links its runtime
+  into native executables as well. The instrumentation itself is shared
+  (`compile_common` feeds both backends), so bytecode-only work still only
+  needs `make world`.
 - After editing anything in `typing/`, `driver/`, `utils/`, or a `.c` in
   `runtime/`: just `make -j4 world`. `runtime/primitives` and
   `runtime/prims.c` are regenerated automatically. Only
@@ -162,6 +164,21 @@ runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
 `-use-runtime` is needed because the shipped runtime does not export
 `caml_wire_emit` / `caml_wire_traverse`; without it the program dies with
 `unavailable primitive caml_wire_emit`.
+
+The native equivalent (needs `make opt` to have run; `ocamlopt` is itself
+a bytecode executable, so it too runs under `runtime/ocamlrun`):
+
+```sh
+runtime/ocamlrun ./ocamlopt -nostdlib -I stdlib -I vreplay -visual-replay \
+  -o /tmp/t.out /tmp/t.ml
+```
+
+No `-use-runtime` here: a native executable links `libasmrun.a` from this
+tree, which already carries `snapshot.o` (`runtime_COMMON_C_SOURCES` feeds
+both runtimes), so `caml_wire_emit`/`caml_wire_traverse` resolve at C link
+time. The flip side: linking an instrumented program against a stock
+`libasmrun` fails at link time with undefined-symbol errors for those two —
+the native analogue of bytecode's "unavailable primitive".
 
 `_install/` currently holds only `lib/ocaml` in both checkouts — there is no
 `_install/bin` unless someone runs `make install`, and if they do, prefer
@@ -463,10 +480,13 @@ has a literal newline inside the string, so `ocamlc -help` prints it across
 two lines, and the text itself ("Render the txt file for JSIP debugger
 tool") no longer describes what the flag does.
 
-**3. `-visual-replay` is a silent no-op in the toplevel.** The flag is
+**3. `-visual-replay` does not work in the toplevel.** The flag is
 registered in all four frontends, but `toplevel/` never goes through
 `compile_common` — it types phrases via `Typemod.type_toplevel_phrase`. So
-`ocaml -visual-replay` accepts the flag and does nothing.
+`ocaml -visual-replay` / `ocamlnat -visual-replay` accept the flag without
+instrumenting anything. No longer *silent*: since PR #16, `Toploop.prepare`
+warns on stderr that the flag is ignored. Actual toplevel instrumentation
+remains unimplemented.
 
 **4. `dune build` cannot succeed.** The root `dune` still lists a `vreplay`
 module from the stub era (`Error: Module Vreplay doesn't exist`), and none

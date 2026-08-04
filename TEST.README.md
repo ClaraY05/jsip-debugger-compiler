@@ -8,7 +8,8 @@ in this checkout on 2026-07-30.
 ## 1. Build
 
 ```sh
-make -j world        # bytecode build; native is not supported in this tree
+make -j world        # bytecode build
+make -j opt          # optional: ocamlopt, native runtime, vreplay.cmxa
 ```
 
 Confirm the build actually relinked `ocamlc`:
@@ -48,6 +49,15 @@ What each part is for:
   `ds_table`) calls at the Typedtree layer.
 - `-use-runtime $PWD/runtime/ocamlrun` -- the output program needs
   `caml_wire_emit`/`caml_wire_traverse`, which only this tree's runtime has.
+
+The native equivalent, after `make opt` (verified 2026-08-04; no
+`-use-runtime` -- the primitives are already in this tree's `libasmrun.a`,
+and the executable needs no shebang):
+
+```sh
+runtime/ocamlrun ./ocamlopt -nostdlib -I stdlib -I vreplay -visual-replay \
+  -o <out> <in.ml>
+```
 
 ## 3. Positive test -- Map program, expect three sexp events
 

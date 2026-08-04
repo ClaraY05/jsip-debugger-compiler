@@ -6,6 +6,15 @@ testing/run_tests.sh map_basic    # run selected cases
 testing/run_tests.sh --promote    # rewrite expected/ from current output
 ```
 
+When the tree also has a native compiler (`make opt`), every case runs
+twice -- once compiled by `ocamlc`, once by `ocamlopt` (labelled
+`[native]` in the output) -- against the **same** `expected/` dumps:
+the wire format is backend-independent, so the two runs must agree up
+to the address bijection.  Without `ocamlopt` the native pass is
+skipped with a note.  `--promote` rewrites `expected/` from the
+bytecode run only; the native pass then re-checks against the freshly
+promoted goldens.
+
 Each `cases/<name>.ml` is compiled with `-visual-replay` from the repo
 root (so `loc` strings stay relative and stable), run, and checked two
 ways:

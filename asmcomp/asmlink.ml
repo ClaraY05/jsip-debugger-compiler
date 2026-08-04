@@ -346,6 +346,19 @@ let link ~ppf_dump objfiles output_name =
       if !Clflags.nopervasives then objfiles
       else if !Clflags.output_c_object then stdlib :: objfiles
       else stdlib :: (objfiles @ [stdexit]) in
+    (* Under -visual-replay the instrumentation injects calls to
+       [Vreplay.snapshot] into the program, so its runtime library must be
+       linked in.  It depends on the stdlib, so it goes right after
+       [stdlib.cmxa] and before the user's modules.  [vreplay.cmxa] is
+       resolved on the load path (see Compmisc, which adds "+vreplay" under
+       the same flag).  Mirrors the bytecode side (see Bytelink). *)
+    let objfiles =
+      if !Clflags.visual_replay then
+        match objfiles with
+        | "stdlib.cmxa" :: rest -> "stdlib.cmxa" :: "vreplay.cmxa" :: rest
+        | other -> "vreplay.cmxa" :: other
+      else objfiles
+    in
     let obj_infos = List.map read_file objfiles in
     let ldeps = Linkdeps.create ~complete:true in
     let units_tolink = List.fold_right (scan_file ldeps) obj_infos [] in
