@@ -89,7 +89,6 @@ utils_SOURCES = $(addprefix utils/, \
   compression.mli compression.ml)
 
 parsing_SOURCES = $(addprefix parsing/, \
-  snapshot.mli snapshot.ml \
   location.mli location.ml \
   unit_info.mli unit_info.ml \
   asttypes.mli asttypes.ml \
@@ -869,8 +868,30 @@ endif
 # by its debug-info paths, and a stripped vreplay.cma reads as relocatable
 # where a non-relocatable build is expected.
 VREPLAY_OCAMLC = $(NEW_OCAMLRUN) ./ocamlc -g -nostdlib -I stdlib -I vreplay
+# The C stubs (caml_wire_emit / caml_wire_traverse, vreplay/snapshot.c)
+# travel with the library, otherlibs-style: ocamlmklib archives them and
+# records -dllib/-cclib in vreplay.cma / vreplay.cmxa, so an instrumented
+# program no longer needs this fork's runtime -- any ABI-compatible one
+# resolves the primitives from the stubs.  NB: Makefile.config binds MKLIB
+# to the plain-ar macro used by the runtime library rules, hence the
+# dedicated variable name here.
+VREPLAY_MKLIB = $(NEW_OCAMLRUN) tools/ocamlmklib$(EXE)
+ifeq "$(SUFFIXING)" "true"
+VREPLAY_MKLIB += -suffixed
+VREPLAY_DLL = \
+  vreplay/dllvreplaybyt-$(TARGET)-$(BYTECODE_RUNTIME_ID)$(EXT_DLL)
+else
+VREPLAY_DLL = vreplay/dllvreplaybyt$(EXT_DLL)
+endif
 .PHONY: vreplay
 vreplay: vreplay/vreplay.cma
+# -oc also produces $(VREPLAY_DLL) as a byproduct, as in otherlibs
+vreplay/libvreplaybyt.$(A): vreplay/snapshot.b.$(O) tools/ocamlmklib$(EXE)
+	$(V_OCAMLMKLIB)$(VREPLAY_MKLIB) -oc vreplay/vreplaybyt \
+	    vreplay/snapshot.b.$(O)
+vreplay/libvreplaynat.$(A): vreplay/snapshot.n.$(O) tools/ocamlmklib$(EXE)
+	$(V_OCAMLMKLIB)$(VREPLAY_MKLIB) -oc vreplay/vreplaynat \
+	    vreplay/snapshot.n.$(O)
 vreplay/data_structure.cmi: vreplay/data_structure.mli ocamlc \
     stdlib/stdlib.cma
 	$(VREPLAY_OCAMLC) -c $<
@@ -890,9 +911,11 @@ vreplay/vreplay.cmo: vreplay/vreplay.ml vreplay/vreplay.cmi \
     vreplay/data_structure.cmi vreplay/sexp.cmi ocamlc
 	$(VREPLAY_OCAMLC) -c vreplay/vreplay.ml
 vreplay/vreplay.cma: vreplay/data_structure.cmo vreplay/sexp.cmo \
-    vreplay/vreplay.cmo ocamlc
-	$(VREPLAY_OCAMLC) -a -o $@ vreplay/data_structure.cmo \
-	    vreplay/sexp.cmo vreplay/vreplay.cmo
+    vreplay/vreplay.cmo vreplay/libvreplaybyt.$(A) ocamlc \
+    tools/ocamlmklib$(EXE)
+	$(V_OCAMLMKLIB)$(VREPLAY_MKLIB) -o vreplay/vreplay \
+	    -oc vreplay/vreplaybyt -ocamlc '$(VREPLAY_OCAMLC)' \
+	    vreplay/data_structure.cmo vreplay/sexp.cmo vreplay/vreplay.cmo
 # Native variant, consumed by asmcomp/asmlink.ml under -visual-replay.
 # The .cmx rules reuse the .cmi files produced by the bytecode rules above,
 # so both variants share one set of interfaces.  ./ocamlopt is itself a
@@ -913,17 +936,20 @@ vreplay/vreplay.cmx: vreplay/vreplay.ml vreplay/vreplay.cmi \
     stdlib/stdlib.cmxa
 	$(VREPLAY_OCAMLOPT) -c vreplay/vreplay.ml
 vreplay/vreplay.cmxa: vreplay/data_structure.cmx vreplay/sexp.cmx \
-    vreplay/vreplay.cmx ocamlopt
-	$(VREPLAY_OCAMLOPT) -a -o $@ vreplay/data_structure.cmx \
-	    vreplay/sexp.cmx vreplay/vreplay.cmx
+    vreplay/vreplay.cmx vreplay/libvreplaynat.$(A) ocamlopt \
+    tools/ocamlmklib$(EXE)
+	$(V_OCAMLMKLIB)$(VREPLAY_MKLIB) -o vreplay/vreplay \
+	    -oc vreplay/vreplaynat -ocamlopt '$(VREPLAY_OCAMLOPT)' \
+	    vreplay/data_structure.cmx vreplay/sexp.cmx vreplay/vreplay.cmx
 # The library's artefacts are gitignored, so a distclean that left them
 # behind fails CI's "tree is clean after distclean" check.
 partialclean::
-# literal extensions, not $(O)/$(A): Makefile.config is deliberately not
-# included for clean targets (Makefile.config_if_required), so those
-# variables are empty here
+# literal extensions, not $(O)/$(A)/$(EXT_DLL): Makefile.config is
+# deliberately not included for clean targets
+# (Makefile.config_if_required), so those variables are empty here
 	rm -f vreplay/*.cm* vreplay/*.o vreplay/*.obj vreplay/*.a \
-	  vreplay/*.lib
+	  vreplay/*.lib vreplay/*.so vreplay/*.dll
+	rm -rf $(DEPDIR)/vreplay
 
 # Bootstrap and rebuild the whole system.
 # The compilation of ocaml will fail if the runtime has changed.
@@ -1325,7 +1351,6 @@ runtime_COMMON_C_SOURCES = \
   shared_heap \
   signals \
   skiplist \
-  snapshot \
   startup_aux \
   str \
   sync \
@@ -1667,6 +1692,18 @@ $(foreach runtime_OBJECT_TYPE,$(subst %,,$(runtime_OBJECT_TYPES)), \
 
 $(eval $(call COMPILE_C_FILE,yacc/%,yacc/%,no-deps))
 
+# vreplay C stubs: two objects per source, otherlibs-style, both PIC
+# since the bytecode one also lands in the stubs DLL (see the vreplay
+# library rules above)
+vreplay/%.b.$(O): OC_CFLAGS = $(OC_BYTECODE_CFLAGS) $(SHAREDLIB_CFLAGS)
+vreplay/%.b.$(O): OC_CPPFLAGS = $(OC_BYTECODE_CPPFLAGS)
+$(DEPDIR)/vreplay/%.b.$(D): OC_CPPFLAGS = $(OC_BYTECODE_CPPFLAGS)
+vreplay/%.n.$(O): OC_CFLAGS = $(OC_NATIVE_CFLAGS) $(SHAREDLIB_CFLAGS)
+vreplay/%.n.$(O): OC_CPPFLAGS = $(OC_NATIVE_CPPFLAGS)
+$(DEPDIR)/vreplay/%.n.$(D): OC_CPPFLAGS = $(OC_NATIVE_CPPFLAGS)
+$(eval $(call COMPILE_C_FILE,vreplay/%.b,vreplay/%))
+$(eval $(call COMPILE_C_FILE,vreplay/%.n,vreplay/%))
+
 ## Compilation of runtime assembly files
 
 ASPP_ERROR = \
@@ -1706,6 +1743,10 @@ runtime/%_libasmrunpic.obj: runtime/%.asm
 RUNTIME_DEP_FILES := $(wildcard $(DEPDIR)/runtime/*.$(D))
 .PHONY: $(RUNTIME_DEP_FILES)
 include $(RUNTIME_DEP_FILES)
+
+vreplay_DEPEND_FILES := $(wildcard $(DEPDIR)/vreplay/*.$(D))
+.PHONY: $(vreplay_DEPEND_FILES)
+include $(vreplay_DEPEND_FILES)
 
 .PHONY: runtime
 runtime: stdlib/libcamlrun.$(A)
@@ -2948,15 +2989,21 @@ common-install::
 	$(call INSTALL_ITEMS, \
 	  vreplay/data_structure.cmi vreplay/data_structure.mli \
 	  vreplay/sexp.cmi vreplay/sexp.mli \
-	  vreplay/vreplay.cmi vreplay/vreplay.mli vreplay/vreplay.cma, \
+	  vreplay/vreplay.cmi vreplay/vreplay.mli vreplay/vreplay.cma \
+	  vreplay/libvreplaybyt.$(A), \
 	  lib, vreplay)
+ifeq "$(SUPPORTS_SHARED_LIBRARIES)" "true"
+	$(call INSTALL_ITEMS, $(VREPLAY_DLL), stublibs)
+endif
 
 # Its native variant, for asmlink's vreplay.cmxa (the .cmx files ride
-# along so ocamlopt can inline across the library boundary)
+# along so ocamlopt can inline across the library boundary; the stubs
+# .$(A) resolves via -L, since "+vreplay" is on the load path)
 full-installopt native-install::
 	$(call INSTALL_ITEMS, \
 	  vreplay/data_structure.cmx vreplay/sexp.cmx vreplay/vreplay.cmx \
-	  vreplay/vreplay.cmxa vreplay/vreplay.$(A), \
+	  vreplay/vreplay.cmxa vreplay/vreplay.$(A) \
+	  vreplay/libvreplaynat.$(A), \
 	  lib, vreplay)
 
 define INSTALL_ONE_NAT_TOOL

@@ -32,7 +32,8 @@ config-independent invocation instead:
 
 ```sh
 runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
-  -use-runtime $PWD/runtime/ocamlrun -o <out> <in.ml>
+  -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay \
+  -o <out> <in.ml>
 ```
 
 What each part is for:
@@ -47,11 +48,17 @@ What each part is for:
   is dead here.)
 - `-visual-replay` -- the flag under test: instruments Map/Set (and other
   `ds_table`) calls at the Typedtree layer.
-- `-use-runtime $PWD/runtime/ocamlrun` -- the output program needs
-  `caml_wire_emit`/`caml_wire_traverse`, which only this tree's runtime has.
+- `-use-runtime $PWD/runtime/ocamlrun` -- this clone has no installed
+  runtime for the shebang to point at. Any ABI-compatible runtime works:
+  the wire primitives live in the vreplay stubs DLL, not the runtime.
+- `-dllpath $PWD/vreplay` -- bakes the stubs DLL's directory into the
+  executable; without it the program dies at startup with
+  `unknown C primitive caml_wire_emit` (an installed compiler needs
+  neither flag -- its `stublibs/` covers the DLL).
 
 The native equivalent, after `make opt` (verified 2026-08-04; no
-`-use-runtime` -- the primitives are already in this tree's `libasmrun.a`,
+`-use-runtime`/`-dllpath` -- native links the stubs statically from
+`libvreplaynat.a` via `-cclib -lvreplaynat` recorded in `vreplay.cmxa`,
 and the executable needs no shebang):
 
 ```sh
@@ -72,7 +79,8 @@ let () =
   ignore (M.find "b" m)
 EOF
 runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
-  -use-runtime $PWD/runtime/ocamlrun -o /tmp/t.out /tmp/t.ml
+  -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay \
+  -o /tmp/t.out /tmp/t.ml
 /tmp/t.out
 ```
 
@@ -139,7 +147,8 @@ program with no data-structure calls must dump nothing:
 printf 'let g x = x + 1\nlet f x = x + 2\nlet () = ignore (f (g 1))\n' \
   > /tmp/neg.ml
 runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
-  -use-runtime $PWD/runtime/ocamlrun -o /tmp/neg.out /tmp/neg.ml
+  -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay \
+  -o /tmp/neg.out /tmp/neg.ml
 /tmp/neg.out | wc -c    # must print 0
 ```
 

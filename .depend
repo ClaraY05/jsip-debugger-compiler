@@ -556,11 +556,6 @@ parsing/printast.cmx : \
     parsing/printast.cmi
 parsing/printast.cmi : \
     parsing/parsetree.cmi
-parsing/snapshot.cmo : \
-    parsing/snapshot.cmi
-parsing/snapshot.cmx : \
-    parsing/snapshot.cmi
-parsing/snapshot.cmi :
 parsing/syntaxerr.cmo : \
     parsing/location.cmi \
     parsing/syntaxerr.cmi

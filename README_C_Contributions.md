@@ -378,6 +378,14 @@ in a system with a moving collector.
 
 Goal: expose a C function `caml_wire_emit : string -> unit` to all OCaml code.
 
+> **Note:** this walkthrough covers *runtime-resident* primitives
+> (`runtime_COMMON_C_SOURCES`, the `primitives`/`prims.c` tables). The
+> project's real `caml_wire_emit` no longer lives there: `vreplay/snapshot.c`
+> is compiled into the vreplay library's C-stubs archives by `ocamlmklib`
+> (see the `vreplay` block in the root Makefile), so the primitives travel
+> with `vreplay.cma`/`.cmxa` instead of the runtime. Use the flow below only
+> for primitives that genuinely belong to the runtime.
+
 1. Create `runtime/wire.c`:
 
    ```c

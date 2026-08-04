@@ -29,25 +29,23 @@ ls -la --time-style=full-iso ocamlc driver/compile_common.cmo
 
 `ocamlc` must be **newer** than the `.cmo`. If it is older, the link step did not run.
 
-Then check whether the `Snapshot` module made it in:
+Then check whether the instrumentation unit made it in (`strings` on a `.cma` is a
+false negative — use ocamlobjinfo):
 
 ```sh
-strings compilerlibs/ocamlcommon.cma | grep -c '^Snapshot$'
+runtime/ocamlrun ./tools/ocamlobjinfo compilerlibs/ocamlcommon.cma \
+  | grep Vreplay_instrumentation
 ```
 
 ## 3. If it did not relink
 
-The cause is almost certainly `Makefile:91-92`: `snapshot.mli snapshot.ml` is listed in
-`parsing_SOURCES`, which is wrapped in `$(addprefix parsing/, …)`, but the files actually
-live at `typing/snapshot.{ml,mli}`. There is no `parsing/snapshot.ml`, so the target is
-unsatisfiable.
+The historical cause (a bad `parsing_SOURCES` prefix on a `snapshot` unit) is fixed and
+the unit itself is gone — the wire primitives now live in `vreplay/snapshot.c`, built
+into the vreplay stubs archives, not in any compilerlibs unit or the runtime. A build
+that dies at startup with `unknown C primitive` means stale bytecode binaries against a
+regenerated primitives table: `make partialclean && make world`.
 
-Note that the similar-looking unprefixed entry at `Makefile:174`
-(`vreplay_instrumentation.mli vreplay_instrumentation.ml` in `typing_SOURCES`) is **not**
-a bug — `VPATH` at `Makefile:37` includes `typing`. VPATH does not rescue the `parsing/`
-case because that prerequisite has an explicit directory component.
-
-Report the diagnosis and the one-line fix, but **do not apply it** unless asked.
+Report the diagnosis, but **do not apply fixes** unless asked.
 
 ## 4. Summarize
 
