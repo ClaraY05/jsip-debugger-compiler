@@ -1,0 +1,2 @@
+{(event (id 1) (loc ((file_path testing/cases/user_aux_module_name.ml) (line_number 15) (char_range (13 46)))) (fn (Unnamed "{ size = 3; Tree.label = \"root\" }")) (args ()) (registry ((1 0x7a0f781521f8 node))) (ty ((printed Tree.t) (params ()))) (snapshot ((ds_type User) (root_node ((id 1) (virtual_address 0x7a0f781521f8) (block ((label (String root)) (size (Int 3)))) (children ()))))))
+}

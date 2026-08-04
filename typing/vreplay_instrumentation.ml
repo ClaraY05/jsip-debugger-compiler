@@ -167,7 +167,31 @@ let ds_of_type_unit : (string * string) list =
   ; "Core__Doubly_linked", "Core_doubly_linked"
   ; "Core__Doubly_linked_intf", "Core_doubly_linked"
   ; "Core__Hash_queue", "Core_hash_queue"
-  ; "Core__Hash_queue_intf", "Core_hash_queue" ]
+  ; "Core__Hash_queue_intf", "Core_hash_queue"
+  ; "Core__Union_find", "Core_union_find"
+  (* A [Core.Bag.t] IS a doubly-linked list: core's bag.ml includes
+     Doubly_linked behind an ascription, which keeps the representation
+     and seals the type, so a bag's own unit declares it and it needs
+     naming here as well as in [ds_table].  The real library seals it
+     into the _intf unit that carries the signature. *)
+  ; "Core__Bag", "Core_doubly_linked"
+  ; "Core__Bag_intf", "Core_doubly_linked"
+  (* An auxiliary type declared beside a container's own [t] shares its
+     unit, so it travels under that unit QUALIFIED by the submodule it
+     was reached through -- see [type_unit].  A [Map.Tree.t] is the
+     map's tree with no comparator record around it, and walking one as
+     a map would look for that record and find a node.  Qualified names
+     the catalogue does not claim ([Base__Map.Comparator],
+     [Core__Doubly_linked.Elt]) match nothing here and are left
+     alone. *)
+  ; "Base__Map.Tree", "Core_map_tree"
+  ; "Base__Map_intf.Tree", "Core_map_tree"
+  ; "Core__Map.Tree", "Core_map_tree"
+  ; "Core__Map_intf.Tree", "Core_map_tree"
+  ; "Base__Set.Tree", "Core_set_tree"
+  ; "Base__Set_intf.Tree", "Core_set_tree"
+  ; "Core__Set.Tree", "Core_set_tree"
+  ; "Core__Set_intf.Tree", "Core_set_tree" ]
 
 (* The modules whose calls are events: the unit a called function is
    declared in -- for Base and Core usually the _intf unit its module
@@ -226,7 +250,17 @@ let ds_table : (string * (mutability * string list)) list =
   ; "Core__Doubly_linked", (Mutable, [ "Core_doubly_linked" ])
   ; "Core__Doubly_linked_intf", (Mutable, [ "Core_doubly_linked" ])
   ; "Core__Hash_queue", (Mutable, [ "Core_hash_queue" ])
-  ; "Core__Hash_queue_intf", (Mutable, [ "Core_hash_queue" ]) ]
+  ; "Core__Hash_queue_intf", (Mutable, [ "Core_hash_queue" ])
+  (* [Core.Bag] IS a doubly-linked list -- it includes one wholesale, so
+     its values carry that type and walk with its layout.  Only the
+     functions are its own, which is all this table names. *)
+  ; "Core__Bag", (Mutable, [ "Core_doubly_linked" ])
+  ; "Core__Bag_intf", (Mutable, [ "Core_doubly_linked" ])
+  ; "Core__Union_find", (Mutable, [ "Core_union_find" ]) ]
+  (* [Map.Tree] and [Set.Tree] need no entry: their functions live in
+     the map's and set's own units, which are immutable, and an
+     immutable call observes its RESULT, whose own type decides how it
+     is walked. *)
 
 (* declaring unit of a uid. [Subst] copies uids verbatim, so [Item]
    survives [Map.Make], [include], [open] and aliasing.
@@ -241,25 +275,41 @@ let uid_comp_unit : Shape.Uid.t -> string option = function
    types share its compilation unit and would otherwise be taken for the
    container itself: a [Doubly_linked.Elt.t] is one element, not a list,
    and a [Map.Tree.t] is a bare tree with no wrapper record around it --
-   walking either as its parent would mislabel it.  Matched on the
-   module component a type path is reached through, which is the only
-   place a unit-level table can tell them apart. *)
+   walking either as its parent would mislabel it.  The module component
+   a type path is reached through is the only place a unit-level table
+   can tell them apart. *)
 let aux_type_modules =
   [ "Elt"; "Tree"; "Key"; "Comparator"; "Hashable"; "Header" ]
 
-(* the unit a type's head constructor is declared in, unless the type is
-   one of those auxiliary ones *)
+(* The unit a type's head constructor is declared in -- qualified by the
+   auxiliary module it was reached through ("Base__Map.Tree"), so that
+   [ds_of_type_unit] can claim the ones the catalogue describes and
+   leave the rest matching nothing.
+
+   Qualification applies only to a unit the catalogue already knows.
+   These are ordinary module names a program may well use for its own
+   types, and a user's [Tree] must keep resolving to the user's own unit
+   or the schema path would stop observing it.  A compilation unit name
+   cannot itself contain a dot, so the qualifier is unambiguous. *)
 let type_unit env ty =
   match Types.get_desc ty with
   | Types.Tconstr (path, _, _) ->
-    begin match path with
-    | Path.Pdot (Path.Pdot (_, m), _) when List.mem m aux_type_modules ->
-      None
-    | Path.Pdot _ | Path.Pident _ | Path.Papply _ | Path.Pextra_ty _ ->
-      begin match Env.find_type path env with
-      | decl -> uid_comp_unit decl.type_uid
-      | exception Not_found -> None
+    let aux =
+      match path with
+      | Path.Pdot (Path.Pdot (_, m), _) when List.mem m aux_type_modules
+        -> Some m
+      | Path.Pdot _ | Path.Pident _ | Path.Papply _
+      | Path.Pextra_ty _ -> None
+    in
+    begin match Env.find_type path env with
+    | decl ->
+      let unit = uid_comp_unit decl.type_uid in
+      begin match unit, aux with
+      | Some u, Some m when List.mem_assoc u ds_of_type_unit ->
+        Some (u ^ "." ^ m)
+      | (Some _ | None), _ -> unit
       end
+    | exception Not_found -> None
     end
   | _ -> None
 
@@ -408,11 +458,15 @@ let role_types env ~ds ty =
     (* Base and Core carry theirs as ordinary arguments, a comparator
        or hash witness trailing the ones that mean something; a hash set
        is a table of unit, so its element is the KEY position *)
-    | ("Core_map" | "Core_hashtbl" | "Core_hash_queue"), (key :: data :: _)
-      -> [ ("key", key); ("data", data) ]
+    | ("Core_map" | "Core_hashtbl" | "Core_hash_queue" | "Core_map_tree"),
+      (key :: data :: _) -> [ ("key", key); ("data", data) ]
     | ("Core_set" | "Core_hash_set" | "Core_queue" | "Core_stack"
-      | "Core_deque" | "Core_fdeque" | "Core_doubly_linked" | "Stack"
-      | "Dynarray"), (elt :: _) -> [ ("elt", elt) ]
+      | "Core_deque" | "Core_fdeque" | "Core_doubly_linked"
+      | "Core_set_tree" | "Stack" | "Dynarray"), (elt :: _) ->
+      [ ("elt", elt) ]
+    (* a union-find node's parameter is the value its whole equivalence
+       class carries, which is neither a key nor an element *)
+    | "Core_union_find", (value :: _) -> [ ("value", value) ]
     | _ -> []
     end
   | _ -> []
