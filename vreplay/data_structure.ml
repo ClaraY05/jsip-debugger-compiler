@@ -38,28 +38,19 @@ let to_string = function
   | Core_hash_queue -> "Core_hash_queue"
   | User -> "User"
 
+(* Every entry, so that [of_name] is the exact inverse of [to_string]
+   rather than a second spelling of the same seventeen names.  Adding a
+   constructor makes [to_string] fail to compile; add it here too. *)
+let all =
+  [ Map; Set; Queue; Hashtbl; Stack; Dynarray; Core_map; Core_set;
+    Core_hashtbl; Core_hash_set; Core_queue; Core_stack; Core_deque;
+    Core_fdeque; Core_doubly_linked; Core_hash_queue; User ]
+
 (* The catalogue name the instrumentation passes at each event
    ([ds_table] in typing/vreplay_instrumentation.ml -- it may name
    entries that have none here yet; those events no-op at runtime). *)
-let of_name = function
-  | "Map" -> Some Map
-  | "Set" -> Some Set
-  | "Queue" -> Some Queue
-  | "Hashtbl" -> Some Hashtbl
-  | "Stack" -> Some Stack
-  | "Dynarray" -> Some Dynarray
-  | "Core_map" -> Some Core_map
-  | "Core_set" -> Some Core_set
-  | "Core_hashtbl" -> Some Core_hashtbl
-  | "Core_hash_set" -> Some Core_hash_set
-  | "Core_queue" -> Some Core_queue
-  | "Core_stack" -> Some Core_stack
-  | "Core_deque" -> Some Core_deque
-  | "Core_fdeque" -> Some Core_fdeque
-  | "Core_doubly_linked" -> Some Core_doubly_linked
-  | "Core_hash_queue" -> Some Core_hash_queue
-  | "User" -> Some User
-  | _ -> None
+let of_name name =
+  List.find_opt (fun t -> String.equal (to_string t) name) all
 
 (* Map and Set values never change after creation (operations build new
    versions that share subtrees), so their dumped blocks keep meaning
@@ -417,10 +408,6 @@ let layout = function
         ; interior = 0b00
         ; payload = 0b11 (* key, data *)
         } ]
-  (* a user-declared type has no hand-written skeleton: its root block
-     is described by the schema the instrumentation derived, so the
-     walk starts in schema mode and there are no layers at all *)
-  | User -> []
 
 (* Only the hash queue needs one: its elements chain on their own layer
    while their payload steps down to the next.  [Some]'s field leads to

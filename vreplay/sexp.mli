@@ -12,6 +12,9 @@ type t =
    so the output parses with either [of_string] or sexplib. *)
 val to_string : t -> string
 
+(* [to_string] with the dump's line terminator, built in one pass. *)
+val to_string_line : t -> string
+
 (* Parses exactly one sexp; the inverse of [to_string].  Raises [Failure]
    on malformed or trailing input. *)
 val of_string : string -> t
