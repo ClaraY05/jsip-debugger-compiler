@@ -291,18 +291,29 @@ let chunks : chunk Dynarray.t = Dynarray.create ()
 
 (* The wire id [o] already carries, if some earlier event dumped it as
    an interior member.  Physical scan, like [find_entry]. *)
+exception Found_member of int
+
 let find_member_id (o : Obj.t) : int option =
-  let found = ref None in
-  Dynarray.iter
-    (fun ch ->
-      for i = 0 to Weak.length ch.values - 1 do
-        if !found = None then
+  match
+    Dynarray.iter
+      (fun ch ->
+        for i = 0 to Weak.length ch.values - 1 do
           match Weak.get ch.values i with
-          | Some v when v == o -> found := Some ch.ids.(i)
+          | Some v when v == o -> raise (Found_member ch.ids.(i))
           | _ -> ()
-      done)
-    chunks;
-  !found
+        done)
+      chunks
+  with
+  | () -> None
+  | exception Found_member id -> Some id
+
+(* Replace [d]'s contents with [keep] when the scan dropped anything.
+   Both compactions below build [keep] as they go and call this. *)
+let compact d ~keep =
+  if Dynarray.length keep < Dynarray.length d then begin
+    Dynarray.clear d;
+    Dynarray.append d keep
+  end
 
 (* Track [o] under [name].  Latest non-empty name wins: re-observing a
    structure under a new identifier renames its entry, so the registry
@@ -344,10 +355,7 @@ let live_known () =
         trips := (o, Id.to_int e.id, e.name) :: !trips
       | None -> ())
     registry;
-  if Dynarray.length live < Dynarray.length registry then begin
-    Dynarray.clear registry;
-    Dynarray.append registry live
-  end;
+  compact registry ~keep:live;
   Array.of_list (List.rev !trips)
 
 (* The member table for one event: every live remembered member plus
@@ -372,10 +380,7 @@ let live_members ~known ~root ~include_root ~root_id =
       done;
       if !alive then Dynarray.add_last keep ch)
     chunks;
-  if Dynarray.length keep < Dynarray.length chunks then begin
-    Dynarray.clear chunks;
-    Dynarray.append chunks keep
-  end;
+  compact chunks ~keep;
   Array.iter
     (fun (o, id, _name) -> if o != root then out := (o, id) :: !out)
     known;
@@ -417,7 +422,33 @@ let emit_event ~loc ~fn ~args ~id ~registry ~ty snap =
       ; Sexp.List [ Sexp.Atom "ty"; Sexp.sexp_of_ty ty ]
       ; Sexp.List [ Sexp.Atom "snapshot"; to_sexp snap ] ]
   in
-  emit (Sexp.to_string line ^ "\n")
+  emit (Sexp.to_string_line line)
+
+(* The flattened layout is a pure function of the catalogue entry -- one
+   of seventeen constants -- so it is built once per entry rather than
+   rebuilt on every event.  [schemas] and [edges] below genuinely vary
+   per call site and stay where they are. *)
+let layers_cache : (Data_structure.t, flat_layer array) Hashtbl.t =
+  Hashtbl.create 17
+
+let layers_for ds_ty =
+  match Hashtbl.find_opt layers_cache ds_ty with
+  | Some layers -> layers
+  | None ->
+    let targets = Data_structure.interior_targets ds_ty in
+    let layers =
+      Array.of_list
+        (List.mapi
+           (fun i layer ->
+              flatten_layer
+                (match List.assoc_opt i targets with
+                 | Some t -> t
+                 | None -> [])
+                layer)
+           (Data_structure.layout ds_ty))
+    in
+    Hashtbl.add layers_cache ds_ty layers;
+    layers
 
 (* ---- entry point injected at every event ---- *)
 let snapshot ~loc ~fn ~ds ~args ~name ~ty ~schema root =
@@ -427,18 +458,7 @@ let snapshot ~loc ~fn ~ds ~args ~name ~ty ~schema root =
     let r = Obj.repr root in
     if not (Obj.is_block r) then ()          (* immediates have no identity *)
     else begin
-      let layers =
-        let targets = Data_structure.interior_targets ds_ty in
-        Array.of_list
-          (List.mapi
-             (fun i layer ->
-                flatten_layer
-                  (match List.assoc_opt i targets with
-                   | Some t -> t
-                   | None -> [])
-                  layer)
-             (Data_structure.layout ds_ty))
-      in
+      let layers = layers_for ds_ty in
       let schema_entries, schema_roles = schema in
       let schemas =
         Array.of_list (List.map flatten_schema schema_entries)

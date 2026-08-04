@@ -25,6 +25,13 @@ type t =
   | Core_fdeque
   | Core_doubly_linked
   | Core_hash_queue
+  | Core_union_find
+  (* The bare trees [Map.Tree] and [Set.Tree], which callers hold with
+     no comparator wrapped around them.  Each is its parent's tree layer
+     with the root record dropped, and SHARES the parent's shapes rather
+     than restating them, so the two cannot drift apart. *)
+  | Core_map_tree
+  | Core_set_tree
   (* [User] is not a container: it is any type the user's own program
      declared, whose shape comes from the schema the instrumentation
      derived rather than from a hand-written layout here. *)

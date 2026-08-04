@@ -748,12 +748,8 @@ static value alloc_block(const cfield *fl)
     CAMLreturnT(value, bx);
 }
 
-/* external traverse :
- *   Obj.t -> (Obj.t * int * string) array -> (Obj.t * int) array
- *   -> int * int
- *   -> (string array * int * int * bool) array
- *   -> node * (int * nativeint * string) array * (int * int) array
- *   = "caml_wire_traverse" */
+/* The OCaml-side signature this implements is spelled out in the file
+   header; it was duplicated here and had gone stale. */
 CAMLprim value caml_wire_traverse(value v_root, value v_known,
                                   value v_members, value v_ids,
                                   value v_layout)

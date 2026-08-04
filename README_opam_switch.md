@@ -88,9 +88,10 @@ Expectations, so nobody debugs a non-bug:
   of the switch (CMI magic `Caml1999I037` end to end).
 - Its dump carries Core's structures: `Core_map`, `Core_set`,
   `Core_hashtbl`, `Core_hash_set`, `Core_queue`, `Core_stack`,
-  `Core_deque`, `Core_fdeque`, `Core_doubly_linked`, and plain `Queue`
-  for `Linked_queue` (which is a `Stdlib.Queue.t`). See
-  `vreplay/README.md` for the catalogue.
+  `Core_deque`, `Core_fdeque`, `Core_doubly_linked` (`Bag` too),
+  `Core_hash_queue`, `Core_union_find`, `Core_map_tree`,
+  `Core_set_tree`, and plain `Queue` for `Linked_queue` (which is a
+  `Stdlib.Queue.t`). See `vreplay/README.md` for the catalogue.
 - Stdlib-structure programs compiled in this switch produce full dumps
   (see Verify above), including under dune.
 

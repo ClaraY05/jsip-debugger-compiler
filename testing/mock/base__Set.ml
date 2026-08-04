@@ -44,3 +44,13 @@ let rec insert tree elt =
     else Node { n with right = insert n.right elt }
 
 let add t elt = { t with tree = insert t.tree elt }
+
+(* the set's tree with no comparator record around it, as Base declares
+   it beside the set itself *)
+module Tree = struct
+  type 'a t = 'a tree
+
+  (* annotated for the same reason as the map's -- see base__Map.ml *)
+  let empty : _ t = Empty
+  let add (t : _ t) elt : _ t = insert t elt
+end

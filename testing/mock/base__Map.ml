@@ -73,3 +73,19 @@ let rec remove_tree tree key =
     else n.left
 
 let remove t key = { t with tree = remove_tree t.tree key }
+
+(* The bare tree, with no comparator record around it -- what a caller
+   holds when the comparator lives elsewhere.  Base declares it beside
+   the map and it shares the map's compilation unit, so the [Tree] in
+   the path is the only thing telling the two apart. *)
+module Tree = struct
+  type ('k, 'v) t = ('k, 'v) tree
+
+  (* Base's .mli keeps this type abstract, so a caller never sees the
+     alias and the type of a tree is always written [Map.Tree.t].  The
+     annotations here say the same thing without an .mli: without them
+     inference reports the raw [Base__Map.tree], which resolves to the
+     map itself. *)
+  let empty : _ t = Empty
+  let set (t : _ t) ~key ~data : _ t = insert t key data
+end

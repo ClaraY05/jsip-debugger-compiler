@@ -942,7 +942,10 @@ vreplay/vreplay.cmxa: vreplay/data_structure.cmx vreplay/sexp.cmx \
 	    -oc vreplay/vreplaynat -ocamlopt '$(VREPLAY_OCAMLOPT)' \
 	    vreplay/data_structure.cmx vreplay/sexp.cmx vreplay/vreplay.cmx
 # The library's artefacts are gitignored, so a distclean that left them
-# behind fails CI's "tree is clean after distclean" check.
+# behind fails CI's "tree is clean after distclean" check.  Extensions
+# spelled out, as everywhere else here: $(O) and $(A) are Makefile.config
+# variables and expand to nothing at this level, which left the native
+# build's .o and .a behind.
 partialclean::
 # literal extensions, not $(O)/$(A)/$(EXT_DLL): Makefile.config is
 # deliberately not included for clean targets
