@@ -15,10 +15,24 @@ are one type at runtime, so they are one entry (`Core_map`).
 | `Core_hashtbl` `Core_hash_set` | Base/Core | record → bucket array → AVL tree; a hash set IS a table of `unit` |
 | `Core_queue` `Core_stack` `Core_deque` | Base/Core | preallocated buffers; only the live window is walked |
 | `Core_fdeque` | Core (`Fdeque`, `Fqueue`) | `{front; back; length}` over two lists |
-| `Core_doubly_linked` | Core | a ref over a circular element ring |
+| `Core_doubly_linked` | Core (`Doubly_linked`, `Bag`) | a ref over a circular element ring |
+| `Core_hash_queue` | Core | that ring in queue order; the table indexing it is bookkeeping |
+| `Core_union_find` | Core | an inverted forest: nodes point UP at a shared root record |
+| `Core_map_tree` `Core_set_tree` | Base/Core (`Map.Tree`, `Set.Tree`) | the parents' tree layer with no comparator record on top |
 
 `Core.Linked_queue` is a `Stdlib.Queue.t` and so is walked as `Queue`:
 entries follow the root's TYPE, never the module the call went through.
+`Core.Bag` goes the other way -- its representation IS a doubly-linked
+list, sealed into a type of its own, so Bag's units are named in both
+tables and the list's layout walks it.
+
+Auxiliary types a container declares beside its own `t` share its
+compilation unit, so a type reached through one travels QUALIFIED by
+that module (`Base__Map.Tree`) and the catalogue claims the ones it
+describes. The rest -- `Comparator`, `Hashable`, `Doubly_linked.Elt` --
+match nothing and are left alone. `Elt` is deliberately among them: a
+list's `insert` and a bag's `add` both RETURN one, and claiming the type
+would mint a structure per insertion.
 
 ## Adding one
 
@@ -27,7 +41,10 @@ entries follow the root's TYPE, never the module the call went through.
    first, the last one repeating. A layer lists every block shape it
    accepts (tag and field count), which is also how one layout covers
    several library versions; `Array_elements` takes a `window` when the
-   live slots are bounded by fields of the parent record.
+   live slots are bounded by fields of the parent record, and
+   `interior_targets` names the layer a field leads to when it is not
+   simply the next one down (a hash queue's elements chain on their own
+   layer, a union-find node's `parent` steps back to layer 0).
 2. `typing/vreplay_instrumentation.ml`: the unit the TYPE is declared in
    (`ds_of_type_unit`) and the units of the modules whose calls are
    events (`ds_table`), with the entries each module operates on. For

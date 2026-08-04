@@ -17,6 +17,9 @@ type t =
   | Core_fdeque
   | Core_doubly_linked
   | Core_hash_queue
+  | Core_union_find
+  | Core_map_tree
+  | Core_set_tree
   | User
 
 let to_string = function
@@ -36,6 +39,9 @@ let to_string = function
   | Core_fdeque -> "Core_fdeque"
   | Core_doubly_linked -> "Core_doubly_linked"
   | Core_hash_queue -> "Core_hash_queue"
+  | Core_union_find -> "Core_union_find"
+  | Core_map_tree -> "Core_map_tree"
+  | Core_set_tree -> "Core_set_tree"
   | User -> "User"
 
 (* The catalogue name the instrumentation passes at each event
@@ -58,6 +64,9 @@ let of_name = function
   | "Core_fdeque" -> Some Core_fdeque
   | "Core_doubly_linked" -> Some Core_doubly_linked
   | "Core_hash_queue" -> Some Core_hash_queue
+  | "Core_union_find" -> Some Core_union_find
+  | "Core_map_tree" -> Some Core_map_tree
+  | "Core_set_tree" -> Some Core_set_tree
   | "User" -> Some User
   | _ -> None
 
@@ -69,10 +78,11 @@ let of_name = function
    spines exactly as the stdlib's do; its buffer-backed containers
    mutate in place, and so does a doubly-linked list. *)
 let is_immutable = function
-  | Map | Set | Core_map | Core_set | Core_fdeque -> true
+  | Map | Set | Core_map | Core_set | Core_fdeque | Core_map_tree
+  | Core_set_tree -> true
   | Queue | Hashtbl | Stack | Dynarray | Core_hashtbl | Core_hash_set
   | Core_queue | Core_stack | Core_deque | Core_doubly_linked
-  | Core_hash_queue | User -> false
+  | Core_hash_queue | Core_union_find | User -> false
 
 type shape =
   { tag : int option
@@ -118,6 +128,46 @@ type layer =
    wire has always used for cells. *)
 let cons_cell =
   Fixed { labels = [ "0"; "1" ]; interior = 0b10; payload = 0b01 }
+
+(* The tree a Base/Core map is built from:  Leaf {key; data}  and
+   Node {left; key; data; right; weight}  (Empty is the int 0).  Base
+   v0.16's nodes were AVL, with a height where the weight now is -- the
+   extra shape accepts both, since only the field COUNT and order
+   matter here.  Shared, because [Map.Tree] is this same tree with no
+   wrapper record around it and the two must not drift apart. *)
+let core_map_tree =
+  Cases
+    [ { tag = Some 0 (* Leaf *)
+      ; labels = [ "v"; "d" ]
+      ; interior = 0b00
+      ; payload = 0b11 (* v, d *)
+      }
+    ; { tag = Some 1 (* Node *)
+      ; labels = [ "l"; "v"; "d"; "r"; "w" ]
+      ; interior = 0b01001 (* l, r *)
+      ; payload = 0b00110 (* v, d *)
+      } ]
+
+(* likewise for a set:  Leaf {elt}  and  Node {left; elt; right; weight}.
+   Base v0.16's AVL node carried both a height and a subtree size, hence
+   the five-field shape. *)
+let core_set_tree =
+  Cases
+    [ { tag = Some 0 (* Leaf *)
+      ; labels = [ "v" ]
+      ; interior = 0b0
+      ; payload = 0b1 (* v *)
+      }
+    ; { tag = Some 1 (* Node *)
+      ; labels = [ "l"; "v"; "r"; "w" ]
+      ; interior = 0b0101 (* l, r *)
+      ; payload = 0b0010 (* v *)
+      }
+    ; { tag = Some 1 (* Node, with a height and a subtree size *)
+      ; labels = [ "l"; "v"; "r"; "h"; "s" ]
+      ; interior = 0b00101 (* l, r *)
+      ; payload = 0b00010 (* v *)
+      } ]
 
 (* Bit i of a mask covers field i of the node the layer describes. *)
 let layout = function
@@ -211,20 +261,8 @@ let layout = function
           ; interior = 0b010 (* tree *)
           ; payload = 0b100 (* length *)
           } ]
-    ; Cases
-        [ { tag = Some 0 (* Leaf *)
-          ; labels = [ "v"; "d" ]
-          ; interior = 0b00
-          ; payload = 0b11 (* v, d *)
-          }
-        ; { tag = Some 1 (* Node *)
-          ; labels = [ "l"; "v"; "d"; "r"; "w" ]
-          ; interior = 0b01001 (* l, r *)
-          ; payload = 0b00110 (* v, d *)
-          } ] ]
-  (* Base/Core Set: the same wrapper over  Leaf {elt}  and
-     Node {left; elt; right; weight}.  Base v0.16's AVL node carried
-     both a height and a subtree size, hence the five-field shape. *)
+    ; core_map_tree ]
+  (* Base/Core Set: the same wrapper over the set's tree. *)
   | Core_set ->
     [ Cases
         [ { tag = None
@@ -232,22 +270,11 @@ let layout = function
           ; interior = 0b10 (* tree *)
           ; payload = 0b00
           } ]
-    ; Cases
-        [ { tag = Some 0 (* Leaf *)
-          ; labels = [ "v" ]
-          ; interior = 0b0
-          ; payload = 0b1 (* v *)
-          }
-        ; { tag = Some 1 (* Node *)
-          ; labels = [ "l"; "v"; "r"; "w" ]
-          ; interior = 0b0101 (* l, r *)
-          ; payload = 0b0010 (* v *)
-          }
-        ; { tag = Some 1 (* Node, with a height and a subtree size *)
-          ; labels = [ "l"; "v"; "r"; "h"; "s" ]
-          ; interior = 0b00101 (* l, r *)
-          ; payload = 0b00010 (* v *)
-          } ] ]
+    ; core_set_tree ]
+  (* [Map.Tree] and [Set.Tree] are those same trees held with no
+     comparator around them, so the walk starts one layer in. *)
+  | Core_map_tree -> [ core_map_tree ]
+  | Core_set_tree -> [ core_set_tree ]
   (* Base/Core Hashtbl: the root is
      {table; length; growth_allowed; hashable; iteration}  (that last
      field is [mutation_allowed] in Base v0.16, an iterator count
@@ -417,20 +444,49 @@ let layout = function
         ; interior = 0b00
         ; payload = 0b11 (* key, data *)
         } ]
-  (* a user-declared type has no hand-written skeleton: its root block
-     is described by the schema the instrumentation derived, so the
-     walk starts in schema mode and there are no layers at all *)
-  | User -> []
+  (* Core Union_find: an INVERTED forest.  A node is  {node}  holding
+     either  Inner parent, whose field is another node's own record --
+     one layer BACK, see [interior_targets] -- or  Root {value; rank},
+     the value the whole equivalence class shares.  Two nodes united
+     converge on that one root record, and the wire says so by giving
+     the second walk to reach it an [Id]; a chain path compression has
+     flattened shows as every node pointing straight at the root.  The
+     two shapes name their single field differently on purpose:
+     [interior_targets] is keyed by label, and these lead to different
+     layers.  [rank] is bookkeeping (a bound on depth, not the user's
+     value). *)
+  | Core_union_find ->
+    [ Fixed { labels = [ "node" ]; interior = 0b1; payload = 0b0 }
+    ; Cases
+        [ { tag = Some 0 (* Inner *)
+          ; labels = [ "parent" ]
+          ; interior = 0b1
+          ; payload = 0b0
+          }
+        ; { tag = Some 1 (* Root *)
+          ; labels = [ "root" ]
+          ; interior = 0b1
+          ; payload = 0b0
+          } ]
+    ; Fixed
+        { labels = [ "value"; "rank" ]
+        ; interior = 0b00
+        ; payload = 0b01 (* value *)
+        } ]
 
-(* Only the hash queue needs one: its elements chain on their own layer
-   while their payload steps down to the next.  [Some]'s field leads to
-   the element layer too, because what the ref holds through the option
-   IS an element. *)
+(* Two structures need one.  A hash queue's elements chain on their own
+   layer while their payload steps down to the next ([Some]'s field
+   leads to the element layer too, because what the ref holds through
+   the option IS an element).  A union-find node's [parent] points at
+   another node's record, which is layer 0 -- the one place a structure
+   steps BACKWARDS. *)
 let interior_targets = function
   | Core_hash_queue -> [ (2, [ ("0", 2); ("next", 2) ]) ]
+  | Core_union_find -> [ (1, [ ("parent", 0) ]) ]
   | Map | Set | Queue | Hashtbl | Stack | Dynarray | Core_map | Core_set
   | Core_hashtbl | Core_hash_set | Core_queue | Core_stack | Core_deque
-  | Core_fdeque | Core_doubly_linked | User -> []
+  | Core_fdeque | Core_doubly_linked | Core_map_tree | Core_set_tree
+  | User -> []
 
 (* Labels must be ones [layout]'s shapes above actually use, and the
    field they name must be one the payload mask already keeps, so the
@@ -451,6 +507,11 @@ let payload_roles = function
      different fields but call it [v] in each *)
   | Core_map -> [ []; [ ("v", "key"); ("d", "data") ] ]
   | Core_set -> [ []; [ ("v", "elt") ] ]
+  (* the same trees, minus the root record the roles skipped anyway *)
+  | Core_map_tree -> [ [ ("v", "key"); ("d", "data") ] ]
+  | Core_set_tree -> [ [ ("v", "elt") ] ]
+  (* the class's value, which only the root record holds *)
+  | Core_union_find -> [ []; []; [ ("value", "value") ] ]
   | Core_hashtbl | Core_hash_set ->
     [ []; []; [ ("k", "key"); ("v", "data") ] ]
   (* both lists hold elements, and both walk with the same cell layer *)

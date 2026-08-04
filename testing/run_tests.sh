@@ -66,7 +66,8 @@ $OCAMLC vreplay/vreplay.cma -o "$TMP/check_dump" testing/check_dump.ml \
 # dependency order, which is not alphabetical.
 mock_units="base__Hashtbl base__Hash_set base__Map base__Set \
     base__Queue base__Stack base__Linked_queue core__Map core__Deque \
-    core__Fdeque core__Doubly_linked core__Hash_queue"
+    core__Fdeque core__Doubly_linked core__Hash_queue core__Bag \
+    core__Union_find"
 mock_srcs=""
 for u in $mock_units; do
     # a unit with an .mli hides its representation, as the library it
