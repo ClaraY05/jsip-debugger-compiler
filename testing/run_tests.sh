@@ -14,6 +14,13 @@
 # testing/expected/<name>.dump.  A final smoke test streams one case
 # through a VREPLAY_SOCK Unix-socket listener.
 #
+# When ./ocamlopt exists (make opt), every case additionally compiles
+# and runs under the native compiler, against the SAME expected/ dumps:
+# the wire format is backend-independent, so byte and native output must
+# be equal up to the address bijection.  Without ocamlopt the native
+# pass is skipped with a note.  --promote rewrites expected/ from the
+# bytecode run only; the native pass then re-checks against it.
+#
 # expected/ holds the VERBATIM dump of a real run -- byte-for-byte what
 # the interface's reader will be fed; nothing in it is rewritten.  Since
 # raw heap addresses differ run to run, the comparison (not the files)
@@ -34,12 +41,24 @@ fi
 # at the in-tree stdlib and vreplay library (see TEST.README.md)
 OCAMLC="runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay \
     -use-runtime $PWD/runtime/ocamlrun"
+# native executables need no -use-runtime: they link this tree's
+# libasmrun.a, which already carries the wire primitives
+OCAMLOPT="runtime/ocamlrun ./ocamlopt -nostdlib -I stdlib -I vreplay"
+
+modes="byte"
+if [ -f ocamlopt ] && [ -f vreplay/vreplay.cmxa ]; then
+    modes="byte native"
+else
+    echo "SKIP native pass (no ocamlopt/vreplay.cmxa; build with make opt)"
+fi
 
 TMP=$(mktemp -d) || exit 2
 cleanup() {
     rm -rf "$TMP"
     rm -f testing/cases/*.cmi testing/cases/*.cmo \
+        testing/cases/*.cmx testing/cases/*.o \
         testing/mock/*.cmi testing/mock/*.cmo \
+        testing/mock/*.cmx testing/mock/*.o \
         testing/check_dump.cmi testing/check_dump.cmo
 }
 trap cleanup EXIT INT TERM
@@ -78,62 +97,78 @@ for u in $mock_units; do
 done
 $OCAMLC -a -I testing/mock -o "$TMP/mocks.cma" $mock_srcs \
     || { echo "error: cannot build the Base/Core mocks" >&2; exit 2; }
+case $modes in *native*)
+    $OCAMLOPT -a -I testing/mock -o "$TMP/mocks.cmxa" $mock_srcs \
+        || { echo "error: cannot build the native Base/Core mocks" >&2
+             exit 2; } ;;
+esac
 
 pass=0; failed=0
-for src in $cases; do
+canon() {
+    awk '{
+        line = $0; out = ""
+        while (match(line, /0x[0-9a-f]+/)) {
+            a = substr(line, RSTART, RLENGTH)
+            if (!(a in seen)) seen[a] = "0xA" ++n
+            out = out substr(line, 1, RSTART - 1) seen[a]
+            line = substr(line, RSTART + RLENGTH)
+        }
+        print out line
+    }' "$1"
+}
+for mode in $modes; do
+  for src in $cases; do
     name=$(basename "$src" .ml)
-    if ! $OCAMLC -visual-replay -I testing/mock "$TMP/mocks.cma" \
-        -o "$TMP/$name.exe" "$src" > "$TMP/$name.compile" 2>&1; then
-        echo "FAIL $name (compile)"; cat "$TMP/$name.compile"
+    # both modes share expected/<name>.dump: the wire format does not
+    # depend on the backend, so only the addresses may differ
+    if [ "$mode" = native ]; then
+        label="$name [native]"
+        comp="$OCAMLOPT -visual-replay -I testing/mock $TMP/mocks.cmxa"
+    else
+        label=$name
+        comp="$OCAMLC -visual-replay -I testing/mock $TMP/mocks.cma"
+    fi
+    out="$TMP/$name.$mode"
+    if ! $comp -o "$out.exe" "$src" > "$out.compile" 2>&1; then
+        echo "FAIL $label (compile)"; cat "$out.compile"
         failed=$((failed + 1)); continue
     fi
     # the sink opens lazily at the first event, so an event-free program
     # creates no file at all: pre-create it, making "no events" an empty
     # dump for check_dump and the golden diff
-    : > "$TMP/$name.dump"
-    if ! VREPLAY_FILE="$TMP/$name.dump" "$TMP/$name.exe" \
-        > "$TMP/$name.stdout" 2> "$TMP/$name.err"; then
-        echo "FAIL $name (run)"; cat "$TMP/$name.err"
+    : > "$out.dump"
+    if ! VREPLAY_FILE="$out.dump" "$out.exe" \
+        > "$out.stdout" 2> "$out.err"; then
+        echo "FAIL $label (run)"; cat "$out.err"
         failed=$((failed + 1)); continue
     fi
-    if ! "$TMP/check_dump" "$TMP/$name.dump" > "$TMP/$name.check" 2>&1
+    if ! "$TMP/check_dump" "$out.dump" > "$out.check" 2>&1
     then
-        echo "FAIL $name (check_dump)"; cat "$TMP/$name.check"
+        echo "FAIL $label (check_dump)"; cat "$out.check"
         failed=$((failed + 1)); continue
     fi
-    if [ $promote -eq 1 ]; then
-        cp "$TMP/$name.dump" "testing/expected/$name.dump"
-        echo "PROMOTED $name ($(cat "$TMP/$name.check"))"
+    if [ $promote -eq 1 ] && [ "$mode" = byte ]; then
+        cp "$out.dump" "testing/expected/$name.dump"
+        echo "PROMOTED $name ($(cat "$out.check"))"
         pass=$((pass + 1)); continue
     fi
     if [ ! -f "testing/expected/$name.dump" ]; then
-        echo "FAIL $name (no expected dump; run with --promote)"
+        echo "FAIL $label (no expected dump; run with --promote)"
         failed=$((failed + 1)); continue
     fi
-    canon() {
-        awk '{
-            line = $0; out = ""
-            while (match(line, /0x[0-9a-f]+/)) {
-                a = substr(line, RSTART, RLENGTH)
-                if (!(a in seen)) seen[a] = "0xA" ++n
-                out = out substr(line, 1, RSTART - 1) seen[a]
-                line = substr(line, RSTART + RLENGTH)
-            }
-            print out line
-        }' "$1"
-    }
-    canon "testing/expected/$name.dump" > "$TMP/$name.expcanon"
-    canon "$TMP/$name.dump" > "$TMP/$name.actcanon"
-    if diff -u "$TMP/$name.expcanon" "$TMP/$name.actcanon" \
-        > "$TMP/$name.diff"; then
-        echo "PASS $name ($(cat "$TMP/$name.check"))"
+    canon "testing/expected/$name.dump" > "$out.expcanon"
+    canon "$out.dump" > "$out.actcanon"
+    if diff -u "$out.expcanon" "$out.actcanon" \
+        > "$out.diff"; then
+        echo "PASS $label ($(cat "$out.check"))"
         pass=$((pass + 1))
     else
-        echo "FAIL $name (dump mismatch; diff shown with canonicalized" \
+        echo "FAIL $label (dump mismatch; diff shown with canonicalized" \
             "addresses)"
-        cat "$TMP/$name.diff"
+        cat "$out.diff"
         failed=$((failed + 1))
     fi
+  done
 done
 
 # Socket sink smoke test: stream one case's dump through VREPLAY_SOCK
