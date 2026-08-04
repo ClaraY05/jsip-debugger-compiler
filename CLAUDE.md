@@ -480,10 +480,13 @@ has a literal newline inside the string, so `ocamlc -help` prints it across
 two lines, and the text itself ("Render the txt file for JSIP debugger
 tool") no longer describes what the flag does.
 
-**3. `-visual-replay` is a silent no-op in the toplevel.** The flag is
+**3. `-visual-replay` does not work in the toplevel.** The flag is
 registered in all four frontends, but `toplevel/` never goes through
 `compile_common` — it types phrases via `Typemod.type_toplevel_phrase`. So
-`ocaml -visual-replay` accepts the flag and does nothing.
+`ocaml -visual-replay` / `ocamlnat -visual-replay` accept the flag without
+instrumenting anything. No longer *silent*: since PR #16, `Toploop.prepare`
+warns on stderr that the flag is ignored. Actual toplevel instrumentation
+remains unimplemented.
 
 **4. `dune build` cannot succeed.** The root `dune` still lists a `vreplay`
 module from the stub era (`Error: Module Vreplay doesn't exist`), and none
