@@ -12,13 +12,16 @@ module Wire = struct
       ; argument_list: (string * string * string) list
   }
 
+  (* columns through [Location.get_pos_info], so the wire reports them
+     the same way the compiler's own diagnostics do *)
   let location_of (exp : Typedtree.expression) =
-    let start = exp.exp_loc.Location.loc_start in
-    let stop = exp.exp_loc.Location.loc_end in
-    ( start.Lexing.pos_fname
-    , start.Lexing.pos_lnum
-    , start.Lexing.pos_cnum - start.Lexing.pos_bol
-    , stop.Lexing.pos_cnum - stop.Lexing.pos_bol )
+    let file, line, start_col =
+      Location.get_pos_info exp.exp_loc.Location.loc_start
+    in
+    let _, _, stop_col =
+      Location.get_pos_info exp.exp_loc.Location.loc_end
+    in
+    (file, line, start_col, stop_col)
 
   (* A [let] binding observed for its own sake.  There is no function
      here, so the bound expression's own source text stands in for one
@@ -575,10 +578,7 @@ let root_schema ~ds (e : Typedtree.expression) =
    own.  Predef types ([list], [array], [int]) never reach this test --
    [uid_comp_unit] already fails closed on them, which is what keeps a
    bare [let xs = [1; 2; 3]] from becoming an event. *)
-let is_stdlib_unit unit =
-  let p = "Stdlib" in
-  String.length unit >= String.length p
-  && String.equal (String.sub unit 0 (String.length p)) p
+let is_stdlib_unit unit = String.starts_with ~prefix:"Stdlib" unit
 
 (* [e]'s head type constructor was declared by the program itself.
    Read WITHOUT [Ctype.expand_head]: expanding follows an alias like
@@ -698,11 +698,11 @@ let root_expression (exp : Typedtree.expression) args = function
 
 (* ---- code generation ---- *)
 
-(* wrap [exp] (a Texp_apply) in frame markers, optionally running
-   [inject_before] ahead of the call and each [inject_after] hook (in
-   list order) after it, with the result bound to [res_binder_name]; a
-   raising call skips everything after itself.  returns an exp_desc. *)
-let instrument_call ?inject_before ~inject_after
+(* wrap [exp] (a Texp_apply) in frame markers, running each
+   [inject_after] hook (in list order) after the call, with the result
+   bound to [res_binder_name]; a raising call skips everything after
+   itself.  returns an exp_desc. *)
+let instrument_call ~inject_after
       (exp : Typedtree.expression)
       ~(emit : Env.t -> string -> Typedtree.expression) =
   let res_uid = Shape.Uid.mk ~current_unit:(Env.get_current_unit ()) in
@@ -779,12 +779,7 @@ let instrument_call ?inject_before ~inject_after
        ; vb_loc=exp.exp_loc
        }], tail))
   in
-  let head =
-    match inject_before with
-    | None -> tail
-    | Some hook -> seq exp.exp_env (hook exp.exp_env) tail
-  in
-  (seq exp.exp_env (emit exp.exp_env frame_open) head).exp_desc
+  (seq exp.exp_env (emit exp.exp_env frame_open) tail).exp_desc
 
 (* rewrite each [Texp_apply] that [classify] marks as an event: the
    post-call hook hands the traversal root to [Vreplay.snapshot], which

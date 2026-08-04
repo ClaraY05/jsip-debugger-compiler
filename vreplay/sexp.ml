@@ -17,25 +17,15 @@ let must_quote s =
          | c -> Char.code c < 32 || Char.code c > 126)
        s
 
-let add_escaped buf s =
-  String.iter
-    (fun c ->
-      match c with
-      | '"' -> Buffer.add_string buf "\\\""
-      | '\\' -> Buffer.add_string buf "\\\\"
-      | '\n' -> Buffer.add_string buf "\\n"
-      | '\t' -> Buffer.add_string buf "\\t"
-      | '\r' -> Buffer.add_string buf "\\r"
-      | '\b' -> Buffer.add_string buf "\\b"
-      | c when Char.code c < 32 || Char.code c > 126 ->
-        Buffer.add_string buf (Printf.sprintf "\\%03d" (Char.code c))
-      | c -> Buffer.add_char buf c)
-    s
-
+(* [String.escaped] is exactly the escaping [of_string] undoes: the same
+   six two-character escapes and a three-digit decimal for everything
+   outside ' '..'~'.  It returns its argument unchanged when nothing
+   needs escaping, which is the common case here -- most quoted atoms
+   are quoted for a space, not for a control character. *)
 let rec render buf = function
   | Atom s when must_quote s ->
     Buffer.add_char buf '"';
-    add_escaped buf s;
+    Buffer.add_string buf (String.escaped s);
     Buffer.add_char buf '"'
   | Atom s -> Buffer.add_string buf s
   | List xs ->
@@ -50,6 +40,15 @@ let rec render buf = function
 let to_string x =
   let buf = Buffer.create 256 in
   render buf x;
+  Buffer.contents buf
+
+(* One dump line.  Kept here rather than [to_string x ^ "\n"] at the call
+   site because an event carries a whole walked snapshot, and appending
+   would copy the largest string the program builds a second time. *)
+let to_string_line x =
+  let buf = Buffer.create 256 in
+  render buf x;
+  Buffer.add_char buf '\n';
   Buffer.contents buf
 
 (* ---- parsing ---- *)
