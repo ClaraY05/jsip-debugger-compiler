@@ -2412,8 +2412,7 @@ typing/vreplay_instrumentation.cmx : \
     parsing/ast_helper.cmx \
     typing/vreplay_instrumentation.cmi
 typing/vreplay_instrumentation.cmi : \
-    typing/typedtree.cmi \
-    parsing/asttypes.cmi
+    typing/typedtree.cmi
 bytecomp/bytegen.cmo : \
     lambda/switch.cmi \
     typing/subst.cmi \
