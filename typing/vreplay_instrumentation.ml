@@ -321,16 +321,17 @@ let type_unit env ty =
    ([Doubly_linked.t] is an [Elt.t option ref], and a ref is nobody's
    data structure) is only recognisable before.  Whether a library hides
    a type behind its .mli then stops mattering. *)
-let type_units (e : Typedtree.expression) =
-  let as_written = type_unit e.exp_env e.exp_type in
-  let expanded =
-    type_unit e.exp_env (Ctype.expand_head e.exp_env e.exp_type)
-  in
+let type_units_of env ty =
+  let as_written = type_unit env ty in
+  let expanded = type_unit env (Ctype.expand_head env ty) in
   match as_written, expanded with
   | Some a, Some b when String.equal a b -> [ a ]
   | Some a, Some b -> [ a; b ]
   | Some a, None | None, Some a -> [ a ]
   | None, None -> []
+
+let type_units (e : Typedtree.expression) =
+  type_units_of e.exp_env e.exp_type
 
 (* the catalogue entry [e]'s type is walked as, by the first of its
    units the catalogue knows.  [None] for anything else: a type from an
@@ -644,10 +645,10 @@ let is_stdlib_unit unit = String.starts_with ~prefix:"Stdlib" unit
    declared it: the container path already observes it, with the call
    that built it and the roles of its contents, so observing the binding
    as well would emit the same value twice under worse metadata. *)
-let is_user_declared (e : Typedtree.expression) =
-  match Types.get_desc e.exp_type with
+let is_user_declared_type env ty =
+  match Types.get_desc ty with
   | Types.Tconstr (path, _, _) ->
-    begin match Env.find_type path e.exp_env with
+    begin match Env.find_type path env with
     | decl ->
       begin match uid_comp_unit decl.type_uid with
       | Some unit ->
@@ -662,18 +663,93 @@ let is_user_declared (e : Typedtree.expression) =
   | Types.Tvariant _ | Types.Tunivar _ | Types.Tpoly _
   | Types.Tpackage _ | Types.Tfunctor _ -> false
 
+let is_user_declared (e : Typedtree.expression) =
+  is_user_declared_type e.exp_env e.exp_type
+
+(* ---- scope: which binding a name means where an event fires ----
+
+   The registry says what a structure is CALLED; that alone cannot tell
+   [let m = M.add "a" 1 m]'s two versions apart, since both are called
+   [m] and both stay alive.  So every event also carries the identity of
+   the binding its root is known by, and what each tracked name resolves
+   to at that program point.  A reader compares the two: they agree
+   while the structure still answers to its name, and part company once
+   a later [let] takes the name over or its scope is left behind. *)
+
+(* A binding's identity: the unit that bound it, then the identifier
+   with the stamp separating it from every other binding of that name --
+   [Map_basic.m_88].  The qualifier matters because stamps restart per
+   compilation unit, so [m_88] alone would collide across the files of
+   one program. *)
+let binder_of_ident ~file id =
+  let unit =
+    String.capitalize_ascii
+      (Filename.remove_extension (Filename.basename file))
+  in
+  unit ^ "." ^ Ident.unique_name id
+
+(* What [name] means in [env] -- the same question the source asks, so
+   the innermost binding wins.  A name bound to something this unit did
+   not bind (or to nothing at all) has no identity we could compare and
+   drops out as "". *)
+let binder_at env ~file name =
+  match Env.find_value_by_name (Longident.Lident name) env with
+  | (Path.Pident id, _) -> binder_of_ident ~file id
+  | _ -> ""
+  | exception Not_found -> ""
+
+(* Whether a value of this type could ever be a tracked root -- a
+   catalogued container, or one of the program's own declared types.
+   Deliberately looser than [classify], which also weighs the function
+   called: a name that turns out never to label a root costs one scope
+   pair nobody compares against, while a name left out would read as
+   "out of scope" for a structure the program can still reach. *)
+let is_trackable env ty =
+  List.exists
+    (fun unit -> List.mem_assoc unit ds_of_type_unit)
+    (type_units_of env ty)
+  || is_user_declared_type env ty
+
+(* the pass's own bindings, which are in scope at an injection point but
+   are not the program's ([__vreplay_res], [__wire_emit]) *)
+let is_internal name =
+  String.length name >= 2 && name.[0] = '_' && name.[1] = '_'
+
+(* What every name that could reach a tracked structure means HERE, read
+   straight off the environment.
+
+   Accumulating the names as the pass walks would be cheaper and wrong:
+   one call's hooks are TYPED in the reverse of the order they RUN in,
+   so a name whose first sighting is a later-typed hook would be missing
+   from the scope of an event that runs before it -- and a missing name
+   reads as "out of scope" for a structure that is still reachable.  The
+   environment has no such ordering: it is what the source can see at
+   this point, which is the question being asked. *)
+let scope_at env ~file =
+  Env.fold_values
+    (fun name path (vd : Types.value_description) acc ->
+       match path with
+       | Path.Pident id
+         when (not (is_internal name)) && is_trackable env vd.val_type ->
+         (name, binder_of_ident ~file id) :: acc
+       | _ -> acc)
+    None env []
+
 (* ---- the injected observation ---- *)
 
-(* Build and type [Vreplay.snapshot ~loc ~fn ~ds ~args ~name ~ty <root>]
-   in [env].  [root] is always a plain identifier -- [__vreplay_res] or a
-   mutated argument ([argument_roots] only accepts idents) -- so typing
-   it in the post-call env resolves to the value in scope there.  [name]
-   is the identifier the root is known by in the source ("" = none);
-   [loc], [fn], [args], [name] and [ty] become literal tuples/lists of
-   string and int constants in [Wire.t]'s and [root_ty]'s shapes.
-   [Vreplay] is resolved by ordinary name resolution against the
-   instrumented unit's load path ("+vreplay", driver/compmisc.ml). *)
-let snapshot_call env ~loc ~fn ~ds ~args ~name ~ty ~schema ~root =
+(* Build and type [Vreplay.snapshot ~loc ~fn ~ds ~args ~name ~binder
+   ~scope ~ty <root>] in [env].  [root] is always a plain identifier --
+   [__vreplay_res] or a mutated argument ([argument_roots] only accepts
+   idents) -- so typing it in the post-call env resolves to the value in
+   scope there.  [name] is the identifier the root is known by in the
+   source ("" = none); [binder] is the [let] that introduces it, for a
+   root that a binding is taking on, and [None] for one merely observed
+   under a name already in scope.  [loc], [fn], [args], [name], [binder],
+   [scope] and [ty] all become literal tuples/lists of string and int
+   constants in [Wire.t]'s and [root_ty]'s shapes.  [Vreplay] is resolved
+   by ordinary name resolution against the instrumented unit's load path
+   ("+vreplay", driver/compmisc.ml). *)
+let snapshot_call env ~loc ~fn ~ds ~args ~name ~binder ~ty ~schema ~root =
   let str s =
     Ast_helper.Exp.constant
       { pconst_desc = Pconst_string (s, Location.none, None)
@@ -713,6 +789,27 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~ty ~schema ~root =
   let fn_kind, fn_text = fn in
   let ty_printed, ty_params = ty in
   let schema_tbl, schema_roles = schema in
+  (* A [let]'s own binder is NOT in [env]: the hook is typed where the
+     call is, and the binding only takes effect after it.  So the name it
+     takes over is layered on by hand -- the scope an event states is the
+     one a reader is looking at, which is the one just after it.  A root
+     merely observed under an existing name resolves to that binding and
+     the override is the identity. *)
+  let binder =
+    match binder with
+    | Some id -> binder_of_ident ~file id
+    | None -> binder_at env ~file name
+  in
+  let scope =
+    let visible = scope_at env ~file in
+    if String.equal name "" || String.equal binder "" then visible
+    else (name, binder) :: List.remove_assoc name visible
+  in
+  (* [fold_values] has no order worth depending on, and a golden dump is
+     something people read *)
+  let scope =
+    List.sort (fun (a, _) (b, _) -> String.compare a b) scope
+  in
   Typecore.type_expression env
     (Ast_helper.Exp.apply snapshot_fn
        [ ( Asttypes.Labelled "loc"
@@ -721,6 +818,9 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~ty ~schema ~root =
        ; (Asttypes.Labelled "ds",  str ds)
        ; (Asttypes.Labelled "args", list_of arg_triple args)
        ; (Asttypes.Labelled "name", str name)
+       ; (Asttypes.Labelled "binder", str binder)
+       ; ( Asttypes.Labelled "scope"
+         , list_of (fun (n, b) -> tuple [ str n; str b ]) scope )
        ; ( Asttypes.Labelled "ty"
          , tuple [ str ty_printed; list_of ty_pair ty_params ] )
        ; ( Asttypes.Labelled "schema"
@@ -849,13 +949,16 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
      PHYSICALLY the whole RHS -- inner calls stay anonymous.  ([let*]
      bindings never pass through [value_binding]; their results stay
      anonymous.) *)
-  let current_binder : (string * Typedtree.expression) option ref =
+  let current_binder :
+        (string * Ident.t * Typedtree.expression) option ref =
     ref None
   in
   let inject_value_binding self (vb : Typedtree.value_binding) =
+    (* the pattern's own [Ident.t] is the binding's identity: what tells
+       this [m] from the [m] it shadows, which the name cannot *)
     let binder =
       match vb.vb_pat.pat_desc with
-      | Tpat_var (_, { txt; _ }, _) -> Some (txt, vb.vb_expr)
+      | Tpat_var (id, { txt; _ }, _) -> Some (txt, id, vb.vb_expr)
       | _ -> None
     in
     let vb =
@@ -869,7 +972,7 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
        variant, an abstract one) would dump an unlabelled block, which
        is no better than the numbering this replaces. *)
     match binder with
-    | Some (name, bound) when is_user_declared bound ->
+    | Some (name, id, bound) when is_user_declared bound ->
       let ((_ : schema_entry list), roles) as schema =
         root_schema ~ds:user_ds bound
       in
@@ -885,8 +988,8 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
           [ (fun env ->
                snapshot_call env ~loc:wire.Wire.location
                  ~fn:wire.Wire.function_info ~ds:user_ds
-                 ~args:wire.Wire.argument_list ~name ~ty ~schema
-                 ~root:(Longident.Lident res_binder_name)) ]
+                 ~args:wire.Wire.argument_list ~name ~binder:(Some id) ~ty
+                 ~schema ~root:(Longident.Lident res_binder_name)) ]
         in
         { vb with
           vb_expr =
@@ -905,20 +1008,29 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
       | [] -> recurse_down
       | roots ->
         let wire = Wire.format_function_call exp func args in
-        let result_name =
+        let result_binding =
           match !current_binder with
-          | Some (name, rhs) when rhs == exp -> name
-          | Some _ | None -> ""
+          | Some (name, id, rhs) when rhs == exp -> Some (name, id)
+          | Some _ | None -> None
         in
         let hooks =
           List.map
             (fun (root, ds) ->
-               let name =
+               (* a Result is the binding being made, so it carries its
+                  binder; a mutated argument is only observed under a name
+                  that is already in scope, and [snapshot_call] resolves
+                  which binding that is *)
+               let name, binder =
                  match root with
-                 | Result -> result_name
+                 | Result ->
+                   begin match result_binding with
+                   | Some (name, id) -> (name, Some id)
+                   | None -> ("", None)
+                   end
                  | Argument _ ->
-                   Format.asprintf "%a" Pprintast.longident
-                     (root_lid args root)
+                   ( Format.asprintf "%a" Pprintast.longident
+                       (root_lid args root)
+                   , None )
                in
                let root_exp = root_expression exp args root in
                let ty = root_ty ~ds root_exp in
@@ -927,7 +1039,8 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
                fun env ->
                  snapshot_call env ~loc:wire.Wire.location
                    ~fn:wire.Wire.function_info ~ds
-                   ~args:wire.Wire.argument_list ~name ~ty ~schema ~root)
+                   ~args:wire.Wire.argument_list ~name ~binder ~ty ~schema
+                   ~root)
             roots
         in
         { exp with

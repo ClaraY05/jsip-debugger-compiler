@@ -122,6 +122,34 @@ val from_sexp : t -> snapshot
    first tracked and disappear once the GC has collected it. *)
 val sexp_of_registry : (int * nativeint * string) array -> t
 
+(* What the source's names MEAN where an event fired, beside the registry
+   saying what its structures are CALLED:
+
+     (binder Map_basic.m_88)
+     (scope ((m Map_basic.m_88) (q Map_basic.q_71)))
+
+   A binder is one binding's identity -- the unit that bound it, the
+   identifier, and the stamp that separates it from every other binding
+   of that name -- and is opaque: nothing resolves it, readers only
+   compare it.  [scope] pairs every name that has labelled a tracked root
+   in the unit so far with the binding it resolves to at this event's
+   program point, innermost binding winning, as the source would.  Names
+   bound outside the unit, or to nothing here, are absent.
+
+   The two together answer the question the registry cannot: after
+   [let m = M.add "a" 1 m] three live entries are all called [m], and the
+   one whose binder [scope] still maps [m] to is the one the program can
+   reach.  The others are shadowed -- alive, drawn, and greyed out.
+
+   [binder] is the binding the walked root TAKES ON, so a [let]'s own
+   binder appears here before it is in scope anywhere else; it is omitted
+   entirely for a root observed under no name at all (a nested call, a
+   wildcard pattern), the way an anonymous registry entry omits its name.
+   [scope] is always written, empty list included: an event with no
+   [scope] field is a dump from a compiler that predates this, which is
+   not the same as an event whose scope is empty. *)
+val sexp_of_scope : (string * string) list -> t
+
 (* The static type of the walked root, as the instrumentation printed it
    off the typedtree:
 
