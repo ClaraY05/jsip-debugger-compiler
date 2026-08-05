@@ -19,8 +19,8 @@ not start there: the fork point was `511483454` (5.6.0+dev), and
 - **`trunk` is no longer the base.** It still points at `511483454`, so
   `git diff trunk HEAD` mixes the project's work with the entire 5.5-vs-5.6
   upstream delta. To see project work vs upstream, diff against the real
-  base: `git diff 466e585663 HEAD -- <path>` (103 files, ~6k lines, all of
-  it project work).
+  base: `git diff 466e585663 HEAD -- <path>` (155 files, ~8k lines — all
+  project work apart from three dune files; see "Repo hygiene").
 - Most commits appear twice in `git log --all` — once on the 5.6 line, once
   replayed on 5.5. Only the 5.5 copies are ancestors of `vreplay-main`.
 
@@ -36,8 +36,16 @@ jsip_debugger  (this repo)                  ~/jsip-debugger-interface
 
 **You are almost always working on the compiler half.** The interface half
 lives at `~/jsip-debugger-interface` (GitHub `wuad391/jsip-debugger-interface`,
-branch `main`) and has its own `CLAUDE.md`. `~/jsip-visual-debugger` is a
-dead scaffold — ignore it.
+branch `main`) and has its own `CLAUDE.md`.
+
+`~/jsip-visual-debugger` (GitHub `ClaraY05/jsip-visual-debugger`) used to be
+a dead scaffold and is not any more: it holds **both repos as git
+submodules** — this one pinned by `vreplay-main` — and drives
+`cool_name.sh`, the one-command pipeline (build the fork, compile a program
+under `-visual-replay`, run it, open the TUI on the dump). It is where an
+end-to-end check of a compiler change happens, and where a change to this
+repo's build layout will break first. Bumping the submodule pin is how a
+merged PR here reaches it.
 
 Goal of the project: visualize allocated data and data structures as the
 user steps through a replay of their program — a TUI debugger that doesn't
@@ -62,8 +70,7 @@ lost. (Line numbers drift; the symbol names don't.)
 | `driver/main_args.ml:692` + 5 module lists | `-visual-replay` flag wiring. |
 | `Makefile:92`, `:172`, `:872`, `:1299` | Build wiring; `:872` is the `vreplay` library target, `:1299` puts `snapshot` in `runtime_COMMON_C_SOURCES`. |
 | `parsing/snapshot.ml` / `.mli` | `external emit : string -> unit = "caml_wire_emit"`. **Nothing references it** — the mapper splices its own `external` into each instrumented unit, and what actually makes the primitive available is `runtime/snapshot.c` being in `runtime_COMMON_C_SOURCES`. Kept deliberately. |
-| `testing/` | The project's own test suite: golden dumps, their programs, and `check_dump.ml`. See `testing/README.md`. |
-| `test_programs/map_test.ml` | Stale scratch input, wired into no runner, and its `\| Add a, p ->` pattern doesn't match its own `action` type. Use `testing/cases/` or `.tmp_files/tmp.ml` instead. |
+| `testing/` | The project's own test suite: golden dumps (49 cases), their programs, the Base/Core mocks, and `check_dump.ml`. See `testing/README.md`. |
 
 **`REVIEW_FINDINGS.md` no longer exists** (deleted in `ff240449a1`). Several
 in-repo docs still cite it by number — `testing/README.md` mentions
@@ -104,7 +111,7 @@ make -j4 world         # full/incremental build (bytecode). This machine has 4 c
   name** and hit a phantom "unavailable primitive" error.
 - **`make bootstrap` is not needed** for this project's kind of change.
 - Adding a new `.c` file to the runtime means adding its stem to
-  `runtime_COMMON_C_SOURCES` (`Makefile:1252`).
+  `runtime_COMMON_C_SOURCES` (`Makefile:1280`).
 
 **`make -j` races on a from-scratch tree** (e.g. a fresh worktree). Once
 `LINKC ocamlc` starts, a concurrent job in `debugger/` or `ocamltest/` tries
@@ -130,7 +137,10 @@ before `ecb3981bb1` while the sources are on 5.5. Rebuild before trusting it.
 `.depend` is tracked and can go stale. It is `include`d by the Makefile, so
 make remakes it whenever it looks out of date — even `make -n` is enough —
 and it then shows up modified in `git status`. That is expected, not your
-change. `make depend` and commit it once to be rid of it.
+change. Run **`make alldepend`** (`depend` plus `stdlib/` and the
+`otherlibs/`, which is what CI's check covers) and commit the result. It
+also goes stale after **merging someone else's commit**, not just after
+your own edits, so re-run it post-merge.
 
 ---
 
@@ -297,6 +307,17 @@ are canonicalized for the comparison only, so goldens stay verbatim run
 output and double as the interface repo's parser fixtures. `testing/README.md`
 lists what the cases cover.
 
+**When the tree has a native compiler, every case runs twice.** If `ocamlopt`
+and `vreplay/vreplay.cmxa` exist (i.e. `make opt` has run), the suite
+compiles and runs each case under both backends against the **same**
+`expected/` dumps — the wire is backend-independent, so byte and native
+output must agree up to the address bijection. Without them the native pass
+is skipped with a printed note that is easy to miss: a bytecode-only tree
+reports `50 passed` (49 cases + the socket-sink smoke test) and a full one
+`99 passed`, so the count is how you tell which run you got. `--promote`
+re-blesses from the bytecode run only, and the native pass then re-checks
+against the freshly promoted goldens.
+
 **`testing/mock/` is how the Base/Core cases run at all.** This tree has no
 opam switch and no Core installed, so the suite compiles miniature stand-ins
 that reuse the *real unit names and representations*
@@ -324,6 +345,21 @@ the only way to check the Core catalogue entries against *real* Core layouts
 rather than `testing/mock/`'s stand-ins. Needs at least `b3dd6d23a1` on the
 branch.
 
+**The switch installed on this machine (`~/.opam/jsip-vreplay`) is stale and
+emits nothing.** Verified 2026-08-03: `testing/cases/map_basic.ml` through
+that switch produces `{}{}{}` — frames, no records — while the same case in
+an in-tree build is fine, so it is the install, not the branch. Copying
+fresh `vreplay/*.cmi *.cma` into `<switch>/lib/ocaml/vreplay/` does **not**
+fix it (and overwrites the originals); it needs
+`opam reinstall --switch=jsip-vreplay ocaml-variants` off current
+`vreplay-main`. Until then, the cheaper way to test against real Core is to
+build in-tree and drive `ocamlfind ocamlc -package core -linkpkg
+-visual-replay` with `OCAMLFIND_COMMANDS=ocamlc=<wrapper>`, the wrapper
+running this tree's `ocamlc` under its own `ocamlrun` against the switch's
+`lib/ocaml`. Re-copy the tree's `vreplay/` artifacts into the switch after
+every rebuild — the layouts live there, and a stale copy silently tests the
+old catalogue.
+
 ---
 
 ## The wire format contract
@@ -336,10 +372,12 @@ format, and the `ty` shape are all documented there.
 Both sides derive from this one schema — no string parsing remains anywhere
 — but **the interface trails the compiler by design**: a structure lands
 here first, and the interface has to grow the matching `Ds_type`
-constructor before it can read the newer dumps. As of 2026-08-03 its `main`
-handles `Map`/`Set`/`Queue` while this repo emits fifteen `ds_type` names
-(the six stdlib containers, eight Core/Base ones, and `User`). Assume a
-freshly vendored dump needs interface work, not that it is broken.
+constructor before it can read the newer dumps. As of 2026-08-05 this repo
+emits **twenty** `ds_type` names (six stdlib containers, thirteen Core/Base
+ones, and `User`) while the interface's `main` reads the seventeen that
+existed at PR #15 — `Core_union_find`, `Core_map_tree` and `Core_set_tree`
+are the three it cannot parse yet. Assume a freshly vendored dump needs
+interface work, not that it is broken.
 
 Every event is one line:
 
@@ -412,9 +450,16 @@ runtime, and a layout nothing maps to is dead.
 | `Map`, `Set` | `Stdlib__Map`, `Stdlib__Set` | immutable — the result |
 | `Queue`, `Hashtbl`, `Stack`, `Dynarray` | the matching `Stdlib__*` | mutable — each structure-typed argument, read post-call (so `pop`/`peek` fire by design) |
 | `Core_map`, `Core_set` | `Base__Map`, `Core__Map`, their `*_intf`, likewise for Set | immutable |
-| `Core_hashtbl`, `Core_hash_set`, `Core_queue`, `Core_stack`, `Core_deque`, `Core_fdeque`, `Core_doubly_linked` | the matching `Base__*` / `Core__*` and their `*_intf` | mutable (`Core_fdeque` immutable) |
+| `Core_hashtbl`, `Core_hash_set`, `Core_queue`, `Core_stack`, `Core_deque`, `Core_fdeque`, `Core_doubly_linked`, `Core_hash_queue`, `Core_union_find` | the matching `Base__*` / `Core__*` and their `*_intf` | mutable (`Core_fdeque` immutable) |
+| `Core_map_tree`, `Core_set_tree` | the *qualified* `Base__Map.Tree`, `Core__Map_intf.Tree`, … | immutable |
 
-Two rules worth internalizing:
+Two modules get no entry of their own. `Core.Bag.t` **is** a
+`Doubly_linked.t` — `bag.ml` includes Doubly_linked behind an ascription,
+which keeps the representation and seals the type — so `Core__Bag` and
+`Core__Bag_intf` map to `Core_doubly_linked`, no new catalogue entry. And
+`Core.Linked_queue` is a `Stdlib.Queue.t`, so it maps to `Queue`.
+
+Three rules worth internalizing:
 
 - **One catalogue entry per *representation*, not per module.** `Core.Map.t`
   is an alias of `Base.Map.t`, and `Map.Poly`, `Int.Map` and every `Make`
@@ -424,7 +469,45 @@ Two rules worth internalizing:
   `Queue`).
 - **The `*_intf` units matter.** Base/Core declare their types in
   `Base__Map_intf` rather than `Base__Map`, so omitting the `_intf` entry
-  silently tracks nothing.
+  silently tracks nothing. This has cost real time twice: `Core.Bag.t`
+  resolves to `Core__Bag_intf`, not to `Core__Doubly_linked` as the
+  `include` suggests, and the mocks agreed with the wrong answer.
+- **An auxiliary type is *qualified*, not excluded.** A type declared beside
+  a container's own `t` shares its unit, so `type_unit` returns it under the
+  submodule it was reached through — `Base__Map.Tree`, not `Base__Map`. The
+  catalogue then claims the qualified names it actually describes
+  (`Base__Map.Tree` → `Core_map_tree`) and leaves the rest
+  (`Core__Doubly_linked.Elt`, `Base__Map.Comparator`) matching nothing.
+  Qualification only kicks in when the *unqualified* unit is already in
+  `ds_of_type_unit`, so a user module named `Tree` is unaffected —
+  `testing/cases/user_aux_module_name.ml` is the test.
+
+A catalogue entry's *layout* is a list of layers, root first, and the walker
+tells skeleton from user data by the **edge** it arrived through, never by a
+block's shape. The pieces, each documented in place in
+`vreplay/data_structure.mli`:
+
+- `Fixed` for a node of one exact size (`labels` + an `interior` and a
+  `payload` bitmask; unmarked fields are bookkeeping and never reach the
+  wire), `Cases` when a layer's blocks come in several shapes chosen by tag
+  and size, `Array_elements` for a variable-size block.
+- Listing several shapes in one `Cases` is **how one layout serves several
+  library versions** — Base's AVL `Node` and its weight-balanced successor
+  both appear. Do that rather than forking the entry.
+- `window` restricts an array layer to its live slots for the structures
+  that keep elements in a preallocated buffer with the bounds in the parent
+  record, so a wrapped ring still reads in queue order.
+- `interior_targets` is for structures that do *not* nest uniformly: a hash
+  queue's elements chain through `next` on their own layer while `value`
+  steps down to the key/data pair.
+- `payload_roles` maps a field **label** (not position) to a `ty` role, which
+  is what lets a derived schema attach to the right slot; the label matters
+  because a Base map keeps its key in field 1 of a `Node` and field 0 of a
+  `Leaf`, calling both `v`.
+
+The last layer repeats once the walk steps past it, which is what makes a
+`l`/`r` spine or a bucket chain work. `User` is the one entry with an empty
+layout.
 
 Classification is by **provenance**, not by name: an application is an event
 iff its function *and* its result type's head constructor were declared in a
@@ -433,6 +516,17 @@ unit listed in `ds_table`, read off `val_uid`/`type_uid`, which survives
 and first-class modules fail closed.
 
 `list`/`array` have predef type constructors and stay uncovered, on purpose.
+
+**A mutable call's roots must be bare identifiers.** `argument_roots` only
+takes arguments whose `exp_desc` is `Texp_ident` (deduplicated by path), so
+`Hashtbl.set t.id_hash ~key ~data` and `Queue.enqueue t.samples n` emit
+**nothing**, while `let q = t.samples in Queue.enqueue q n` emits normally.
+It is skip-not-fail by design — a container argument that is a bigger
+expression has its own events — but the practical consequence is worth
+knowing before debugging a silent dump: a record whose fields are mutable
+containers shows its immutable half (results are rooted at the result, and
+`t.bids <- Map.set t.bids ~key ~data` is fine) and hides its mutable half.
+Bind the field to a local if you need those events.
 
 **2. Values of the program's own types** (`ds_type User`). A `let` whose
 bound expression's head type constructor was declared outside the stdlib is
@@ -528,12 +622,14 @@ no lines over 80 columns, no tabs, ASCII only, newline at EOF.
 
 License headers: new `.ml`/`.mli`/`.c` files normally need the 14-line OCaml
 block (copy it from `typing/typecore.ml:1-14`), but **this project's files
-are exempted instead** — `.gitattributes:28-36` lists `/vreplay/*`,
-`/runtime/snapshot.c`, both `vreplay_instrumentation` files and `/.claude/*`
-as `typo.missing-header=may`. A new project file needs either the header or
-a line there. `.md` files are exempt from the header, long-line and
-non-ASCII checks (`.gitattributes:78,89`), and `testing/` is exempted where
-it holds machine-written output (`.gitattributes:32-35`).
+are exempted instead** — `.gitattributes:28-38` lists `/vreplay/*`,
+`/runtime/snapshot.c`, both `vreplay_instrumentation` files, `testing/`'s
+sources and mocks, and `/.claude/*` as `typo.missing-header=may`. A new
+project file — or a new project *directory*, which is the one that gets
+missed — needs either the header or a line there. `.md` files are exempt
+from the header, long-line and non-ASCII checks (`.gitattributes:80,91`),
+and `/testing/expected/*.dump` additionally from the long-line and
+final-newline checks, since it is byte-exact machine output.
 
 Before committing:
 
@@ -548,10 +644,8 @@ findings under inherited ones. Against `466e585663` the tree is currently
 **clean** — any output is yours.
 
 A `make distclean` that leaves files behind will fail CI's clean-tree check.
-
-`runtime/*.c` must stay **MSVC-clean** (no `ssize_t`, no declarations after
-statements in the old style, etc.). The Windows CI is four jobs: one real
-compile failure plus three fail-fast cancellations, so read the first one.
+See "Reading CI" below for the Windows/MSVC rules and the two failures that
+are usually not yours.
 
 ### Pull requests
 
@@ -583,9 +677,43 @@ release notes. The label exists in the fork; applying it is usually the
 right call.
 
 **Do not modify upstream files** unless the feature genuinely requires it.
-Several accidental reformats are already committed (see below); don't add
-more. In particular avoid editor format-on-save in `runtime/`, `parsing/`,
-and the root `dune`.
+The accidental reformats this fork used to carry have now been reverted
+(see "Repo hygiene"), so a stray upstream hunk in a diff is *yours*. In
+particular avoid editor format-on-save in `runtime/`, `parsing/`, and the
+root `dune`.
+
+### Reading CI
+
+The fork inherits upstream's workflows, which means a lot of jobs and a lot
+of noise. Three things learned the hard way:
+
+- **Never call a PR green off one job.** `Checks` finishing says nothing
+  about the rest of the rollup. Read
+  `gh pr view N --json statusCheckRollup,mergeable,mergeStateStatus` and
+  wait for blank conclusions to settle before claiming anything.
+- **The Windows jobs' most common failure is not yours.** They frequently
+  die in *Install Cygwin* on a mirror 500 — infrastructure. Read the log
+  before believing it. A genuine MSVC break looks different: one real
+  compile failure plus three fail-fast cancellations, so read the first
+  job. `runtime/*.c` must stay MSVC-clean (no `ssize_t`, no declarations
+  after statements in the old style).
+- **`.depend` goes stale after merging someone else's commit**, not only
+  after your own edits. Re-run `make alldepend` post-merge and commit it,
+  or the dependency check fails on a PR that changed nothing relevant.
+
+### Work in flight
+
+Two PRs are open against `vreplay-main` and worth knowing about before
+starting anything adjacent:
+
+- **#20 (draft) moves the C stubs**: `runtime/snapshot.c` →
+  `vreplay/snapshot.c`, compiled by `ocamlmklib` into the library's own
+  stub archives, so instrumented programs work against any ABI-compatible
+  runtime and the fork's `runtime/` delta drops to zero. It deletes
+  `parsing/snapshot.{ml,mli}` and rewrites this file's build and
+  run-by-hand instructions. Don't start a competing edit to `runtime/` or
+  the Makefile's vreplay block.
+- **#9 (open since July)** adds the component suites under `testing/unit/`.
 
 Commit style is informal and mixed (`feat:`/`fix:` alongside freeform).
 Match whatever the surrounding history does; don't impose a convention.
@@ -645,20 +773,19 @@ see an entry marked `prunable`.
   must exist on disk (`make install` recreates it). Never check it back in.
   It remains in git *history*, so clone size still reflects it, and a raw
   diff against a pre-cleanup commit still shows all 228 files.
-- `lambda/matching.cmt4e44c0.tmp` — 0-byte compiler temp file, committed by
-  accident.
-- **`runtime/caml/mlvalues.h`'s 507-line diff is a pure no-op reformat**
-  (brace style + macro line rejoining). No token changed. Not project work.
-- `parsing/parsetree.mli`'s 1-line diff *corrupts the license header*
-  (`projet` → `project`) and breaks its column alignment. Not project work.
-- `parsing/ast_helper.ml`'s +3 lines are trailing whitespace only.
 - `parsing/dune`, root `dune`, `dune-project` diffs are ~99% `dune fmt`
   noise; only two real lines (adding `snapshot` and `vreplay` to module
-  lists).
+  lists). These are the last of the accidental upstream churn.
 - `.tmp_files/` is the authors' gitignored scratch area.
 
-Apart from `_install/`, none of the above has been cleaned up. Just don't
-mistake it for signal.
+**Cleaned up in `5ef7e31a1e` (PR #18) — don't go looking for them.** The
+507-line no-op reformat of `runtime/caml/mlvalues.h`, the 1-line license
+corruption in `parsing/parsetree.mli` (`projet` → `project`), the trailing
+whitespace in `parsing/ast_helper.ml`, and the committed 0-byte
+`lambda/matching.cmt4e44c0.tmp` are all gone. Against `466e585663` the
+non-project files this fork still touches are the three dune files above,
+so `git diff 466e585663 HEAD` is now nearly all signal — 155 files, ~8k
+lines, and it is worth keeping it that way.
 
 ---
 
