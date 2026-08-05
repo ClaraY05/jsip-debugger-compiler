@@ -22,6 +22,13 @@ skipped with a note.  `--promote` rewrites `expected/` from the
 bytecode run only; the native pass then re-checks against the freshly
 promoted goldens.
 
+Before the cases, `check_catalogue.ml` runs once: every catalogue name
+the instrumentation can emit (read from
+`Vreplay_instrumentation.catalogue_names`, against
+`compilerlibs/ocamlcommon`) must resolve in
+`Data_structure.of_name` -- the tables live in two files, and this
+turns a typo'd name (a silent runtime no-op) into a red test.
+
 Each `cases/<name>.ml` is compiled with `-visual-replay` from the repo
 root (so `loc` strings stay relative and stable), run, and checked two
 ways:

@@ -6,3 +6,9 @@
 
 val inject_instrumentation :
   inject:bool -> Typedtree.implementation -> Typedtree.implementation
+
+(* Every catalogue name the instrumentation can emit as an event's
+   [ds].  vreplay/tests/check_catalogue.ml holds each to
+   [Data_structure.of_name]: an unknown name silently no-ops at run
+   time, which is exactly what the check exists to catch. *)
+val catalogue_names : string list

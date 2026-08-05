@@ -319,8 +319,9 @@ compiles and runs each case under both backends against the **same**
 `expected/` dumps — the wire is backend-independent, so byte and native
 output must agree up to the address bijection. Without them the native pass
 is skipped with a printed note that is easy to miss: a bytecode-only tree
-reports `50 passed` (49 cases + the socket-sink smoke test) and a full one
-`99 passed`, so the count is how you tell which run you got. `--promote`
+reports `51 passed` (49 cases + the catalogue round-trip check + the
+socket-sink smoke test) and a full one `100 passed`, so the count is how
+you tell which run you got. `--promote`
 re-blesses from the bytecode run only, and the native pass then re-checks
 against the freshly promoted goldens.
 
@@ -459,11 +460,16 @@ only the `{}` markers.
 Two different things produce events, and they are classified in different
 places.
 
-**1. Catalogued container calls.** `ds_table` in
-`typing/vreplay_instrumentation.ml` maps a *declaring compilation unit* to
-`(mutability, catalogue names)`; `vreplay/src/data_structure.mli` holds the
-layouts. **Extend both together** — a unit named without a layout no-ops at
-runtime, and a layout nothing maps to is dead.
+**1. Catalogued container calls.** `Catalogue.table` in
+`typing/vreplay_instrumentation.ml` has one row per compilation unit:
+`declares` (the catalogue entry of the type the unit declares) and
+`observes` (its calls' mutability and the entries they operate on) — the
+old `ds_of_type_unit`/`ds_table` pair is derived from it and cannot drift.
+`vreplay/src/data_structure.mli` holds the layouts. **Extend both files
+together** — a unit named without a layout no-ops at runtime (now caught:
+`vreplay/tests/check_catalogue.ml` holds every name the table can emit to
+`Data_structure.of_name`, so a typo is a red test, not a silent no-op), and
+a layout nothing maps to is dead.
 
 | Catalogue entry | Declaring units | Root |
 |---|---|---|

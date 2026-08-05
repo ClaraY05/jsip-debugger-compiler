@@ -169,12 +169,14 @@ would mint a structure per insertion.
    `interior_targets` names the layer a field leads to when it is not
    simply the next one down (a hash queue's elements chain on their own
    layer, a union-find node's `parent` steps back to layer 0).
-2. `typing/vreplay_instrumentation.ml`: the unit the TYPE is declared in
-   (`ds_of_type_unit`) and the units of the modules whose calls are
-   events (`ds_table`), with the entries each module operates on. For
-   Base and Core both are usually the `_intf` unit the module type came
-   from, not the implementation -- a wrong guess shows up as an event
-   that never fires, so check against the real library.
+2. `typing/vreplay_instrumentation.ml`: a `Catalogue.table` row per
+   unit -- `declares` (the entry of the type the unit declares) and
+   `observes` (its calls' mutability and the entries they operate on).
+   For Base and Core that is usually the `_intf` unit the module type
+   came from, not the implementation -- a wrong guess shows up as an
+   event that never fires, so check against the real library.  A name
+   with no `data_structure.ml` entry fails the suite's
+   `catalogue_roundtrip` check rather than silently no-opping.
 3. `../tests/core_stubs/`: a stand-in unit with the same name and the same
    representation, plus a case in `../tests/cases/`. The stubs are what
    let CI cover Base and Core with no opam switch installed; they are

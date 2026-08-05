@@ -447,7 +447,9 @@ static bmode window_from(const clayer *ly, value parent, mlsize_t n,
  * known), and [is_array] means every slot takes the single entry in
  * [fields].  An entry may refer to ITSELF -- that is how a list cell's
  * tail and a recursive record close their loop without the table
- * growing forever. */
+ * growing forever.  The encoding (-1 unknown; kind 0 fixed / 1 array)
+ * is declared by [no_schema]/[kind_fixed]/[kind_array] in
+ * typing/vreplay_instrumentation.ml's Schema module -- keep in sync. */
 typedef struct {
     char   **labels;     /* owned; nlabels entries */
     mlsize_t nlabels;

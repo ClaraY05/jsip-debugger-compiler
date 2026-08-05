@@ -106,157 +106,121 @@ module Catalogue = struct
 
 type mutability = Immutable | Mutable
 
-(* The unit a tracked structure's TYPE is declared in, and the catalogue
-   name of the REPRESENTATION that type has -- these names MUST mirror
-   [Data_structure.of_name] in vreplay/src/data_structure.ml.  This is what
-   names a root, because the module a call went through says nothing
-   about what the call hands back: [Core.Linked_queue] hands back a
-   [Stdlib.Queue.t], and [Queue.pop] on a queue of maps hands back a
-   map.  [Core.Map.t] is an alias of [Base.Map.t] and expands to it, but
-   a Core module whose type stopped being transparent would resolve to
-   its own unit, so both are listed.  [list]/[array] are predef-typed,
-   declared in no unit at all; they would need their own rule and are
-   not covered. *)
+(* One row per compilation unit the feature knows, merging what used to
+   be two hand-synced tables:
+
+   - [declares]: the catalogue entry of the TYPE this unit declares --
+     what names a root, since the module a call went through says
+     nothing about what it hands back ([Queue.pop] on a queue of maps
+     hands back a map).  Qualified rows ("Base__Map.Tree") come from
+     [Classify.type_unit]'s auxiliary-module qualification.
+   - [observes]: what this unit's CALLS do -- their mutability and the
+     catalogue ENTRIES they operate on (entries, not units, so one
+     interface serves several representations: Base's Queue_intf backs
+     both the ring buffer and [Linked_queue], a stdlib queue).
+
+   Base/Core rows list BOTH the implementation unit and its [_intf]:
+   which one a type or value resolves to is a fact about how the
+   library was assembled, not about the call site.  [list]/[array] are
+   predef-typed, declared in no unit, and uncovered on purpose;
+   [Base__Container_intf] is absent because its shared operations only
+   read.  Every name these rows can emit must resolve in
+   [Data_structure.of_name] -- vreplay/tests/check_catalogue.ml turns a
+   typo (a silent runtime no-op) into a red test. *)
+type entry =
+  { declares : string option
+  ; observes : (mutability * string list) option }
+
+let d name = { declares = Some name; observes = None }
+let o mut ops = { declares = None; observes = Some (mut, ops) }
+let d_o name mut ops =
+  { declares = Some name; observes = Some (mut, ops) }
+
+let table : (string * entry) list =
+  [ "Stdlib__Map", d_o "Map" Immutable [ "Map" ]
+  ; "Stdlib__Set", d_o "Set" Immutable [ "Set" ]
+  ; "Stdlib__Queue", d_o "Queue" Mutable [ "Queue" ]
+  ; "Stdlib__Hashtbl", d_o "Hashtbl" Mutable [ "Hashtbl" ]
+  ; "Stdlib__Stack", d_o "Stack" Mutable [ "Stack" ]
+  ; "Stdlib__Dynarray", d_o "Dynarray" Mutable [ "Dynarray" ]
+  ; "Base__Map", d_o "Core_map" Immutable [ "Core_map" ]
+  ; "Base__Map_intf", d_o "Core_map" Immutable [ "Core_map" ]
+  ; "Core__Map", d_o "Core_map" Immutable [ "Core_map" ]
+  ; "Core__Map_intf", d_o "Core_map" Immutable [ "Core_map" ]
+  ; "Base__Set", d_o "Core_set" Immutable [ "Core_set" ]
+  ; "Base__Set_intf", d_o "Core_set" Immutable [ "Core_set" ]
+  ; "Core__Set", d_o "Core_set" Immutable [ "Core_set" ]
+  ; "Core__Set_intf", d_o "Core_set" Immutable [ "Core_set" ]
+  ; "Base__Hashtbl", d_o "Core_hashtbl" Mutable [ "Core_hashtbl" ]
+  ; "Base__Hashtbl_intf", d_o "Core_hashtbl" Mutable [ "Core_hashtbl" ]
+  ; "Core__Hashtbl", d_o "Core_hashtbl" Mutable [ "Core_hashtbl" ]
+  ; "Core__Hashtbl_intf", d_o "Core_hashtbl" Mutable [ "Core_hashtbl" ]
+  ; "Base__Hash_set", d_o "Core_hash_set" Mutable [ "Core_hash_set" ]
+  ; "Base__Hash_set_intf", d_o "Core_hash_set" Mutable [ "Core_hash_set" ]
+  ; "Core__Hash_set", d_o "Core_hash_set" Mutable [ "Core_hash_set" ]
+  ; "Core__Hash_set_intf", d_o "Core_hash_set" Mutable [ "Core_hash_set" ]
+  (* a Base/Core queue call can also be handed a stdlib queue
+     ([Linked_queue] is one), hence two operates-on entries *)
+  ; "Base__Queue", d_o "Core_queue" Mutable [ "Core_queue"; "Queue" ]
+  ; "Base__Queue_intf", d_o "Core_queue" Mutable [ "Core_queue"; "Queue" ]
+  ; "Core__Queue", d_o "Core_queue" Mutable [ "Core_queue"; "Queue" ]
+  ; "Core__Queue_intf", d_o "Core_queue" Mutable [ "Core_queue"; "Queue" ]
+  ; "Base__Stack", d_o "Core_stack" Mutable [ "Core_stack" ]
+  ; "Base__Stack_intf", d_o "Core_stack" Mutable [ "Core_stack" ]
+  ; "Core__Stack", d_o "Core_stack" Mutable [ "Core_stack" ]
+  ; "Core__Stack_intf", d_o "Core_stack" Mutable [ "Core_stack" ]
+  (* [Linked_queue] values ARE stdlib queues, so these units declare no
+     type of their own and their calls operate on [Queue] *)
+  ; "Base__Linked_queue", o Mutable [ "Queue" ]
+  ; "Core__Linked_queue", o Mutable [ "Queue" ]
+  ; "Core__Deque", d_o "Core_deque" Mutable [ "Core_deque" ]
+  ; "Core__Deque_intf", d_o "Core_deque" Mutable [ "Core_deque" ]
+  ; "Core__Fdeque", d_o "Core_fdeque" Immutable [ "Core_fdeque" ]
+  ; "Core__Fdeque_intf", d_o "Core_fdeque" Immutable [ "Core_fdeque" ]
+  ; "Core__Fqueue", d_o "Core_fdeque" Immutable [ "Core_fdeque" ]
+  ; "Core__Doubly_linked",
+    d_o "Core_doubly_linked" Mutable [ "Core_doubly_linked" ]
+  ; "Core__Doubly_linked_intf",
+    d_o "Core_doubly_linked" Mutable [ "Core_doubly_linked" ]
+  ; "Core__Hash_queue", d_o "Core_hash_queue" Mutable [ "Core_hash_queue" ]
+  ; "Core__Hash_queue_intf",
+    d_o "Core_hash_queue" Mutable [ "Core_hash_queue" ]
+  (* a [Core.Bag.t] IS a doubly-linked list: bag.ml includes
+     Doubly_linked behind an ascription, keeping the representation and
+     sealing the type into Bag's own units *)
+  ; "Core__Bag", d_o "Core_doubly_linked" Mutable [ "Core_doubly_linked" ]
+  ; "Core__Bag_intf",
+    d_o "Core_doubly_linked" Mutable [ "Core_doubly_linked" ]
+  ; "Core__Union_find", d_o "Core_union_find" Mutable [ "Core_union_find" ]
+  (* The bare trees, reached through auxiliary-module qualification: a
+     [Map.Tree.t] is the map's tree with no comparator record around
+     it, and walking one as a map would find a node where the record
+     should be.  Declares-only -- Tree functions live in the map's and
+     set's own (immutable) units, whose calls observe their RESULT.
+     Qualified names the catalogue does not claim
+     ([Base__Map.Comparator], [Core__Doubly_linked.Elt]) match nothing
+     and are left alone. *)
+  ; "Base__Map.Tree", d "Core_map_tree"
+  ; "Base__Map_intf.Tree", d "Core_map_tree"
+  ; "Core__Map.Tree", d "Core_map_tree"
+  ; "Core__Map_intf.Tree", d "Core_map_tree"
+  ; "Base__Set.Tree", d "Core_set_tree"
+  ; "Base__Set_intf.Tree", d "Core_set_tree"
+  ; "Core__Set.Tree", d "Core_set_tree"
+  ; "Core__Set_intf.Tree", d "Core_set_tree" ]
+
+(* the two views the classifier reads, derived so they cannot drift *)
 let ds_of_type_unit : (string * string) list =
-  [ "Stdlib__Map", "Map"
-  ; "Stdlib__Set", "Set"
-  ; "Stdlib__Queue", "Queue"
-  ; "Stdlib__Hashtbl", "Hashtbl"
-  ; "Stdlib__Stack", "Stack"
-  ; "Stdlib__Dynarray", "Dynarray"
-  (* Base and Core: BOTH a module's implementation unit and the _intf
-     unit its module type came from, because which one a value's type
-     resolves to is a fact about how the library was assembled, not
-     about the call site -- [Base.Map.t] lands on [Base__Map],
-     [Base.Queue.t] on [Base__Queue_intf].  [Linked_queue] is
-     deliberately absent: its values are stdlib queues and must resolve
-     as such. *)
-  ; "Base__Map", "Core_map"
-  ; "Base__Map_intf", "Core_map"
-  ; "Core__Map", "Core_map"
-  ; "Core__Map_intf", "Core_map"
-  ; "Base__Set", "Core_set"
-  ; "Base__Set_intf", "Core_set"
-  ; "Core__Set", "Core_set"
-  ; "Core__Set_intf", "Core_set"
-  ; "Base__Hashtbl", "Core_hashtbl"
-  ; "Base__Hashtbl_intf", "Core_hashtbl"
-  ; "Core__Hashtbl", "Core_hashtbl"
-  ; "Core__Hashtbl_intf", "Core_hashtbl"
-  ; "Base__Hash_set", "Core_hash_set"
-  ; "Base__Hash_set_intf", "Core_hash_set"
-  ; "Core__Hash_set", "Core_hash_set"
-  ; "Core__Hash_set_intf", "Core_hash_set"
-  ; "Base__Queue", "Core_queue"
-  ; "Base__Queue_intf", "Core_queue"
-  ; "Core__Queue", "Core_queue"
-  ; "Core__Queue_intf", "Core_queue"
-  ; "Base__Stack", "Core_stack"
-  ; "Base__Stack_intf", "Core_stack"
-  ; "Core__Stack", "Core_stack"
-  ; "Core__Stack_intf", "Core_stack"
-  ; "Core__Deque", "Core_deque"
-  ; "Core__Deque_intf", "Core_deque"
-  ; "Core__Fdeque", "Core_fdeque"
-  ; "Core__Fdeque_intf", "Core_fdeque"
-  ; "Core__Fqueue", "Core_fdeque"
-  ; "Core__Doubly_linked", "Core_doubly_linked"
-  ; "Core__Doubly_linked_intf", "Core_doubly_linked"
-  ; "Core__Hash_queue", "Core_hash_queue"
-  ; "Core__Hash_queue_intf", "Core_hash_queue"
-  ; "Core__Union_find", "Core_union_find"
-  (* A [Core.Bag.t] IS a doubly-linked list: core's bag.ml includes
-     Doubly_linked behind an ascription, which keeps the representation
-     and seals the type, so a bag's own unit declares it and it needs
-     naming here as well as in [ds_table].  The real library seals it
-     into the _intf unit that carries the signature. *)
-  ; "Core__Bag", "Core_doubly_linked"
-  ; "Core__Bag_intf", "Core_doubly_linked"
-  (* An auxiliary type declared beside a container's own [t] shares its
-     unit, so it travels under that unit QUALIFIED by the submodule it
-     was reached through -- see [type_unit].  A [Map.Tree.t] is the
-     map's tree with no comparator record around it, and walking one as
-     a map would look for that record and find a node.  Qualified names
-     the catalogue does not claim ([Base__Map.Comparator],
-     [Core__Doubly_linked.Elt]) match nothing here and are left
-     alone. *)
-  ; "Base__Map.Tree", "Core_map_tree"
-  ; "Base__Map_intf.Tree", "Core_map_tree"
-  ; "Core__Map.Tree", "Core_map_tree"
-  ; "Core__Map_intf.Tree", "Core_map_tree"
-  ; "Base__Set.Tree", "Core_set_tree"
-  ; "Base__Set_intf.Tree", "Core_set_tree"
-  ; "Core__Set.Tree", "Core_set_tree"
-  ; "Core__Set_intf.Tree", "Core_set_tree" ]
+  List.filter_map
+    (fun (u, e) ->
+       match e.declares with Some n -> Some (u, n) | None -> None)
+    table
 
-(* The modules whose calls are events: the unit a called function is
-   declared in -- for Base and Core usually the _intf unit its module
-   type came from, not the implementation -- the call's mutability, and
-   the catalogue entries the module OPERATES ON.
-
-   A mutable call re-observes its container arguments, but only those:
-   an argument of some other tracked kind is an element being handed
-   over, which the call cannot have mutated ([Queue.add m q] moves [m]
-   into [q], it does not change [m]).  Naming catalogue ENTRIES rather
-   than units is what lets one shared interface serve several
-   representations -- Base's Queue_intf backs both [Base.Queue], a ring
-   buffer, and [Linked_queue], a stdlib queue.
-
-   [Base__Container_intf] is deliberately absent: the operations every
-   container shares ([length], [iter], [fold]) only read, so nothing
-   they are handed can have changed. *)
 let ds_table : (string * (mutability * string list)) list =
-  [ "Stdlib__Map", (Immutable, [ "Map" ])
-  ; "Stdlib__Set", (Immutable, [ "Set" ])
-  ; "Stdlib__Queue", (Mutable, [ "Queue" ])
-  ; "Stdlib__Hashtbl", (Mutable, [ "Hashtbl" ])
-  ; "Stdlib__Stack", (Mutable, [ "Stack" ])
-  ; "Stdlib__Dynarray", (Mutable, [ "Dynarray" ])
-  ; "Base__Map", (Immutable, [ "Core_map" ])
-  ; "Base__Map_intf", (Immutable, [ "Core_map" ])
-  ; "Core__Map", (Immutable, [ "Core_map" ])
-  ; "Core__Map_intf", (Immutable, [ "Core_map" ])
-  ; "Base__Set", (Immutable, [ "Core_set" ])
-  ; "Base__Set_intf", (Immutable, [ "Core_set" ])
-  ; "Core__Set", (Immutable, [ "Core_set" ])
-  ; "Core__Set_intf", (Immutable, [ "Core_set" ])
-  ; "Base__Hashtbl", (Mutable, [ "Core_hashtbl" ])
-  ; "Base__Hashtbl_intf", (Mutable, [ "Core_hashtbl" ])
-  ; "Core__Hashtbl", (Mutable, [ "Core_hashtbl" ])
-  ; "Core__Hashtbl_intf", (Mutable, [ "Core_hashtbl" ])
-  ; "Base__Hash_set", (Mutable, [ "Core_hash_set" ])
-  ; "Base__Hash_set_intf", (Mutable, [ "Core_hash_set" ])
-  ; "Core__Hash_set", (Mutable, [ "Core_hash_set" ])
-  ; "Core__Hash_set_intf", (Mutable, [ "Core_hash_set" ])
-  ; "Base__Queue", (Mutable, [ "Core_queue"; "Queue" ])
-  ; "Base__Queue_intf", (Mutable, [ "Core_queue"; "Queue" ])
-  ; "Core__Queue", (Mutable, [ "Core_queue"; "Queue" ])
-  ; "Core__Queue_intf", (Mutable, [ "Core_queue"; "Queue" ])
-  ; "Base__Stack", (Mutable, [ "Core_stack" ])
-  ; "Base__Stack_intf", (Mutable, [ "Core_stack" ])
-  ; "Core__Stack", (Mutable, [ "Core_stack" ])
-  ; "Core__Stack_intf", (Mutable, [ "Core_stack" ])
-  ; "Base__Linked_queue", (Mutable, [ "Queue" ])
-  ; "Core__Linked_queue", (Mutable, [ "Queue" ])
-  ; "Core__Deque", (Mutable, [ "Core_deque" ])
-  ; "Core__Deque_intf", (Mutable, [ "Core_deque" ])
-  ; "Core__Fdeque", (Immutable, [ "Core_fdeque" ])
-  ; "Core__Fdeque_intf", (Immutable, [ "Core_fdeque" ])
-  ; "Core__Fqueue", (Immutable, [ "Core_fdeque" ])
-  ; "Core__Doubly_linked", (Mutable, [ "Core_doubly_linked" ])
-  ; "Core__Doubly_linked_intf", (Mutable, [ "Core_doubly_linked" ])
-  ; "Core__Hash_queue", (Mutable, [ "Core_hash_queue" ])
-  ; "Core__Hash_queue_intf", (Mutable, [ "Core_hash_queue" ])
-  (* [Core.Bag] IS a doubly-linked list -- it includes one wholesale, so
-     its values carry that type and walk with its layout.  Only the
-     functions are its own, which is all this table names. *)
-  ; "Core__Bag", (Mutable, [ "Core_doubly_linked" ])
-  ; "Core__Bag_intf", (Mutable, [ "Core_doubly_linked" ])
-  ; "Core__Union_find", (Mutable, [ "Core_union_find" ]) ]
-  (* [Map.Tree] and [Set.Tree] need no entry: their functions live in
-     the map's and set's own units, which are immutable, and an
-     immutable call observes its RESULT, whose own type decides how it
-     is walked. *)
+  List.filter_map
+    (fun (u, e) ->
+       match e.observes with Some ob -> Some (u, ob) | None -> None)
+    table
 
 end
 
@@ -512,6 +476,9 @@ type schema_entry =
   ; fields : int list
   ; kind : int }
 
+(* the walker reads these numerically -- keep in sync with the schema
+   handling in vreplay/src/snapshot.c ([cschema]) and the encoding
+   documented in vreplay/src/vreplay.mli *)
 let no_schema = -1
 let kind_fixed = 0
 let kind_array = 1
@@ -676,6 +643,17 @@ let is_user_declared (e : Typedtree.expression) =
   is_user_declared_type e.exp_env e.exp_type
 
 end
+
+(* every catalogue name the tables can emit as an event's [ds];
+   exported so vreplay/tests/check_catalogue.ml can hold each to
+   [Data_structure.of_name] *)
+let catalogue_names =
+  let of_row (_, (e : Catalogue.entry)) =
+    (match e.declares with Some n -> [ n ] | None -> [])
+    @ (match e.observes with Some (_, ops) -> ops | None -> [])
+  in
+  List.sort_uniq String.compare
+    (Schema.user_ds :: List.concat_map of_row Catalogue.table)
 
 (* ---- scope: which binding a name means where an event fires ----
 

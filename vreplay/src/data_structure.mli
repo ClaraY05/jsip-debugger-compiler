@@ -1,6 +1,8 @@
 (* The catalogue of data structures visual replay knows how to walk.
    typing/vreplay_instrumentation.ml maps declaring units to these names
-   in [ds_table]; extend both together when adding a data structure. *)
+   in [Catalogue.table]; extend both together when adding a data
+   structure -- vreplay/tests/check_catalogue.ml fails on any name there
+   that [of_name] cannot resolve. *)
 
 type t =
   (* stdlib *)

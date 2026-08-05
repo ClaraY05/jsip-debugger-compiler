@@ -63,7 +63,8 @@ cleanup() {
         vreplay/tests/cases/*.cmx vreplay/tests/cases/*.o \
         vreplay/tests/core_stubs/*.cmi vreplay/tests/core_stubs/*.cmo \
         vreplay/tests/core_stubs/*.cmx vreplay/tests/core_stubs/*.o \
-        vreplay/tests/check_dump.cmi vreplay/tests/check_dump.cmo
+        vreplay/tests/check_dump.cmi vreplay/tests/check_dump.cmo \
+        vreplay/tests/check_catalogue.cmi vreplay/tests/check_catalogue.cmo
 }
 trap cleanup EXIT INT TERM
 
@@ -80,6 +81,25 @@ fi
 $OCAMLC vreplay/src/vreplay.cma -o "$TMP/check_dump" \
     vreplay/tests/check_dump.ml \
     || { echo "error: cannot build check_dump" >&2; exit 2; }
+
+pass=0; failed=0
+
+# The catalogue round-trip check: every name the instrumentation can
+# emit as an event's ds must resolve in Data_structure.of_name --
+# otherwise it silently no-ops at run time.  Compiler side comes from
+# ocamlcommon, runtime side from vreplay.cma.
+if $OCAMLC -I typing -I compilerlibs compilerlibs/ocamlcommon.cma \
+    vreplay/src/vreplay.cma -o "$TMP/check_catalogue" \
+    vreplay/tests/check_catalogue.ml > "$TMP/catalogue.compile" 2>&1 \
+    && "$TMP/check_catalogue" > "$TMP/catalogue.out" 2> "$TMP/catalogue.err"
+then
+    echo "PASS catalogue_roundtrip ($(cat "$TMP/catalogue.out"))"
+    pass=$((pass + 1))
+else
+    echo "FAIL catalogue_roundtrip"
+    cat "$TMP/catalogue.compile" "$TMP/catalogue.err" 2>/dev/null
+    failed=$((failed + 1))
+fi
 
 # The Base/Core stand-ins: units named exactly as the real libraries'
 # are, holding the real representations, so the Core cases run here and
@@ -110,7 +130,6 @@ case $modes in *native*)
              exit 2; } ;;
 esac
 
-pass=0; failed=0
 canon() {
     awk '{
         line = $0; out = ""
