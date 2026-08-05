@@ -810,9 +810,11 @@ lines, and it is worth keeping it that way.
 
 ## Further reading
 
-- **`README.md`** — the fork's front page (GitHub renders it instead of
-  upstream's `README.adoc`): what the flag does, quick start, and the
-  inventory of what changed vs upstream.
+- **`.github/README.md`** — the fork's front page: what the flag does,
+  quick start, and the inventory of what changed vs upstream. It lives in
+  `.github/` because GitHub picks READMEs by location (`.github/` before
+  the root) — a root `README.md` loses the tie-break to upstream's
+  `README.adoc`, which stays untouched at the root.
 - **`vreplay/src/sexp.mli`** — the wire schema and its prose spec. The single
   most important file to read before touching serialization.
 - **`vreplay/src/README.md`** — the library's own doc: the catalogue, one entry
