@@ -63,13 +63,12 @@ lost. (Line numbers drift; the symbol names don't.)
 |---|---|
 | `typing/vreplay_instrumentation.ml` / `.mli` | **The heart.** A `Tast_mapper` that rewrites each `Texp_apply` that `classify` marks as a DS event: frame markers, result binding, payload schemas derived from the user's type declarations, and a post-call `Vreplay.snapshot` hand-off. |
 | `driver/compile_common.ml:97` | The hookpoint — one line, pipes the typed AST through the mapper. |
-| `runtime/snapshot.c` | Defines `caml_wire_emit` (writes to the dump sink; framing is the OCaml side's job) and `caml_wire_traverse`, the no-allocation BFS walker that builds each event's `node` tree. |
+| `vreplay/snapshot.c` | Defines `caml_wire_emit` (writes to the dump sink; framing is the OCaml side's job) and `caml_wire_traverse`, the no-allocation BFS walker that builds each event's `node` tree. Compiled into the library's own C-stubs archives (`libvreplay{byt,nat}.a` + the stubs DLL), **not** into the runtime — so any ABI-compatible runtime resolves the primitives. |
 | `vreplay/` | **The runtime library** linked into instrumented programs: `data_structure.{ml,mli}` (the catalogue: which DSs are walkable and their per-layer interior/payload layouts), `sexp.{ml,mli}` (sexp AST + printer/parser + **the wire schema** + `to_sexp`/`from_sexp`), `vreplay.{ml,mli}` (weak registry, dump sink, and `snapshot`, the injected entry point). Built by `make vreplay` (part of `world`) into `vreplay/vreplay.cma`. |
 | `bytecomp/bytelink.ml:935`, `asmcomp/asmlink.ml:349`, `driver/compmisc.ml:48` | Flag-gated linking: `vreplay.cma` / `vreplay.cmxa` is prepended after the stdlib archive, and `+vreplay` joins the load path, only under `-visual-replay`. |
 | `utils/clflags.ml:253`, `.mli:221` | `let visual_replay = ref false` |
 | `driver/main_args.ml:692` + 5 module lists | `-visual-replay` flag wiring. |
-| `Makefile:92`, `:172`, `:872`, `:1299` | Build wiring; `:872` is the `vreplay` library target, `:1299` puts `snapshot` in `runtime_COMMON_C_SOURCES`. |
-| `parsing/snapshot.ml` / `.mli` | `external emit : string -> unit = "caml_wire_emit"`. **Nothing references it** — the mapper splices its own `external` into each instrumented unit, and what actually makes the primitive available is `runtime/snapshot.c` being in `runtime_COMMON_C_SOURCES`. Kept deliberately. |
+| `Makefile:172`, `:872` | Build wiring; `:172` puts the instrumentation in `ocamlcommon`, `:872` is the `vreplay` library block — the OCaml halves plus, via `ocamlmklib`, the C stubs archives whose `-dllib`/`-cclib` records ride inside `vreplay.cma`/`.cmxa`. |
 | `testing/` | The project's own test suite: golden dumps (49 cases), their programs, the Base/Core mocks, and `check_dump.ml`. See `testing/README.md`. |
 
 **`REVIEW_FINDINGS.md` no longer exists** (deleted in `ff240449a1`). Several
@@ -108,7 +107,10 @@ make -j4 world         # full/incremental build (bytecode). This machine has 4 c
   `runtime/`: just `make -j4 world`. `runtime/primitives` and
   `runtime/prims.c` are regenerated automatically. Only
   `rm runtime/primitives runtime/prims.c` if you **added a new primitive
-  name** and hit a phantom "unavailable primitive" error.
+  name** and hit a phantom "unavailable primitive" error. **Removing** a
+  primitive name additionally needs `make partialclean` first: every
+  bytecode tool embeds the full old table via `-use-prims` and dies at
+  startup (`unknown C primitive`) under the shrunk runtime until relinked.
 - **`make bootstrap` is not needed** for this project's kind of change.
 - Adding a new `.c` file to the runtime means adding its stem to
   `runtime_COMMON_C_SOURCES` (`Makefile:1280`).
@@ -165,15 +167,19 @@ verified in-tree):
 
 ```sh
 runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
-  -use-runtime $PWD/runtime/ocamlrun -o /tmp/t.out /tmp/t.ml
+  -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay \
+  -o /tmp/t.out /tmp/t.ml
 ```
 
 `-I vreplay` is needed because the injected call references `Vreplay`: while
 `compmisc` adds `+vreplay` to the load path, that resolves under
 `standard_library`, where nothing installs the library from a plain build.
-`-use-runtime` is needed because the shipped runtime does not export
-`caml_wire_emit` / `caml_wire_traverse`; without it the program dies with
-`unavailable primitive caml_wire_emit`.
+`-use-runtime` is needed only because this clone has no installed runtime
+at all — the wire primitives live in the vreplay stubs DLL, not the
+runtime, so any ABI-compatible `ocamlrun` works. `-dllpath` bakes that
+DLL's directory into the executable; without it the program dies at
+startup with `unknown C primitive caml_wire_emit` (the DLL wasn't found —
+an installed compiler needs neither flag, its `stublibs/` covers it).
 
 The native equivalent (needs `make opt` to have run; `ocamlopt` is itself
 a bytecode executable, so it too runs under `runtime/ocamlrun`):
@@ -183,12 +189,11 @@ runtime/ocamlrun ./ocamlopt -nostdlib -I stdlib -I vreplay -visual-replay \
   -o /tmp/t.out /tmp/t.ml
 ```
 
-No `-use-runtime` here: a native executable links `libasmrun.a` from this
-tree, which already carries `snapshot.o` (`runtime_COMMON_C_SOURCES` feeds
-both runtimes), so `caml_wire_emit`/`caml_wire_traverse` resolve at C link
-time. The flip side: linking an instrumented program against a stock
-`libasmrun` fails at link time with undefined-symbol errors for those two —
-the native analogue of bytecode's "unavailable primitive".
+No `-use-runtime` and no `-dllpath` here: native links the stubs
+statically — `vreplay.cmxa` carries `-cclib -lvreplaynat`, and
+`-I vreplay` doubles as `-L vreplay`, so `caml_wire_emit`/
+`caml_wire_traverse` resolve from `libvreplaynat.a` at C link time. A
+stock `libasmrun` works; the executable is fully self-contained.
 
 `_install/` currently holds only `lib/ocaml` in both checkouts — there is no
 `_install/bin` unless someone runs `make install`, and if they do, prefer
@@ -225,7 +230,8 @@ file at all**, not an empty one:
 ```sh
 printf 'let g x = x + 1\nlet f x = x + 2\nlet () = ignore (f (g 1))\n' > /tmp/neg.ml
 runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
-  -use-runtime $PWD/runtime/ocamlrun -o /tmp/neg.out /tmp/neg.ml
+  -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay \
+  -o /tmp/neg.out /tmp/neg.ml
 rm -f /tmp/neg.dump
 VREPLAY_FILE=/tmp/neg.dump /tmp/neg.out
 test ! -e /tmp/neg.dump && echo "no events, as expected"
@@ -249,7 +255,8 @@ let () =
   ignore (M.find "b" m)
 EOF
 runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
-  -use-runtime $PWD/runtime/ocamlrun -o /tmp/t.out /tmp/t.ml
+  -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay \
+  -o /tmp/t.out /tmp/t.ml
 VREPLAY_FILE=/tmp/t.dump /tmp/t.out && cat /tmp/t.dump
 ```
 
@@ -292,7 +299,7 @@ is `children`'s next node.
 
 The project's own tests live in **`testing/`** — golden-dump cases plus a
 structural checker. Run them after any change to the instrumentation, the
-vreplay library, or `runtime/snapshot.c`:
+vreplay library, or `vreplay/snapshot.c`:
 
 ```sh
 testing/run_tests.sh              # everything (needs a built tree)
@@ -605,12 +612,11 @@ dune is only a Merlin helper here, that's backwards.
 
 - *`ocamlc` silently stops relinking* (the `parsing_SOURCES` prefix bug).
   Two false negatives to avoid if you check whether a unit made it into the
-  library: `strings compilerlibs/ocamlcommon.cma | grep -c '^Snapshot$'`
-  returns 0 even when it is there, and a **bare** `./tools/ocamlobjinfo`
-  dies on its shebang and prints nothing, which reads as "absent". The
-  working form is
-  `runtime/ocamlrun ./tools/ocamlobjinfo compilerlibs/ocamlcommon.cma | grep Snapshot`
-  → `Unit name: Snapshot`.
+  library: `strings` on a `.cma` misses unit names even when they are
+  there, and a **bare** `./tools/ocamlobjinfo` dies on its shebang and
+  prints nothing, which reads as "absent". The working form is
+  `runtime/ocamlrun ./tools/ocamlobjinfo compilerlibs/ocamlcommon.cma`
+  and grep for the unit (e.g. `Vreplay_instrumentation`).
 - *`wire_external` unreachable.* It lives at the top level of
   `vreplay_instrumentation.ml` now.
 - *The dump interleaving with the program's stdout.* Fixed by the dedicated
@@ -634,14 +640,15 @@ no lines over 80 columns, no tabs, ASCII only, newline at EOF.
 
 License headers: new `.ml`/`.mli`/`.c` files normally need the 14-line OCaml
 block (copy it from `typing/typecore.ml:1-14`), but **this project's files
-are exempted instead** — `.gitattributes:28-38` lists `/vreplay/*`,
-`/runtime/snapshot.c`, both `vreplay_instrumentation` files, `testing/`'s
-sources and mocks, and `/.claude/*` as `typo.missing-header=may`. A new
-project file — or a new project *directory*, which is the one that gets
-missed — needs either the header or a line there. `.md` files are exempt
-from the header, long-line and non-ASCII checks (`.gitattributes:80,91`),
-and `/testing/expected/*.dump` additionally from the long-line and
-final-newline checks, since it is byte-exact machine output.
+are exempted instead** — `.gitattributes:28-37` lists `/vreplay/*` (which
+covers `vreplay/snapshot.c`), both `vreplay_instrumentation` files,
+`testing/`'s sources and mocks, and `/.claude/*` as
+`typo.missing-header=may`. A new project file — or a new project
+*directory*, which is the one that gets missed — needs either the header or
+a line there. `.md` files are exempt from the header, long-line and
+non-ASCII checks (`.gitattributes:79,90`), and `/testing/expected/*.dump`
+additionally from the long-line and final-newline checks, since it is
+byte-exact machine output.
 
 Before committing:
 
@@ -715,16 +722,9 @@ of noise. Three things learned the hard way:
 
 ### Work in flight
 
-Two PRs are open against `vreplay-main` and worth knowing about before
+One PR is open against `vreplay-main` and worth knowing about before
 starting anything adjacent:
 
-- **#20 (draft) moves the C stubs**: `runtime/snapshot.c` →
-  `vreplay/snapshot.c`, compiled by `ocamlmklib` into the library's own
-  stub archives, so instrumented programs work against any ABI-compatible
-  runtime and the fork's `runtime/` delta drops to zero. It deletes
-  `parsing/snapshot.{ml,mli}` and rewrites this file's build and
-  run-by-hand instructions. Don't start a competing edit to `runtime/` or
-  the Makefile's vreplay block.
 - **#9 (open since July)** adds the component suites under `testing/unit/`.
 
 Commit style is informal and mixed (`feat:`/`fix:` alongside freeform).
@@ -786,8 +786,8 @@ see an entry marked `prunable`.
   It remains in git *history*, so clone size still reflects it, and a raw
   diff against a pre-cleanup commit still shows all 228 files.
 - `parsing/dune`, root `dune`, `dune-project` diffs are ~99% `dune fmt`
-  noise; only two real lines (adding `snapshot` and `vreplay` to module
-  lists). These are the last of the accidental upstream churn.
+  noise; the only real line left adds `vreplay` to a module list. These
+  are the last of the accidental upstream churn.
 - `.tmp_files/` is the authors' gitignored scratch area.
 
 **Cleaned up in `5ef7e31a1e` (PR #18) — don't go looking for them.** The

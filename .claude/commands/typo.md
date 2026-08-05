@@ -28,10 +28,10 @@ via `.gitattributes:63-67`.
 
 ## 3. Expect pre-existing failures
 
-Every file this project added currently fails at least one check — missing headers on
-`typing/vreplay_instrumentation.{ml,mli}` and `runtime/snapshot.c`, missing EOF newlines
-on `typing/snapshot.{ml,mli}`, long lines and trailing whitespace throughout
-`typing/vreplay_instrumentation.ml`.
+Project files historically failed checks — missing headers on
+`typing/vreplay_instrumentation.{ml,mli}` and `vreplay/snapshot.c`, long lines and
+trailing whitespace throughout `typing/vreplay_instrumentation.ml` — and are now
+exempted via `.gitattributes`.
 
 **Fix what the current change touched. Do not embark on a tree-wide cleanup** unless
 asked — it produces an enormous diff that buries the actual work.

@@ -19,8 +19,8 @@ The project's files, in full:
 - `typing/vreplay_instrumentation.ml` / `.mli` — the `Tast_mapper` that rewrites
   `Texp_apply`. This is the heart of the project.
 - `driver/compile_common.ml:117` — the one-line hookpoint.
-- `typing/snapshot.ml` / `.mli` — `external emit : string -> unit = "caml_wire_emit"`
-- `runtime/snapshot.c` — defines `caml_wire_emit`.
+- `vreplay/snapshot.c` — defines `caml_wire_emit`/`caml_wire_traverse`, built into the
+  library's C-stubs archives (not the runtime).
 - `utils/clflags.ml` / `.mli`, `driver/main_args.ml` / `.mli` — `-visual-replay` wiring.
 - `Makefile` (3 hunks), root `dune`, `parsing/dune` — build wiring.
 - `vreplay/` — empty stubs, not built.
@@ -47,8 +47,8 @@ wrong by two orders of magnitude:
 - **`runtime/caml/mlvalues.h`** — its 507-line diff is a pure no-op reformat.
 - **`parsing/parsetree.mli`** — 1 line, a corrupted license header, not a real change.
 - **`parsing/ast_helper.ml`** — 3 lines of trailing whitespace.
-- **`parsing/dune`, root `dune`, `dune-project`** — ~99% `dune fmt` noise; only two real
-  lines (adding `snapshot` and `vreplay` to module lists).
+- **`parsing/dune`, root `dune`, `dune-project`** — ~99% `dune fmt` noise; the only
+  real line adds `vreplay` to a module list.
 - **`.depend`** — regenerated build artifact.
 
 A useful default:

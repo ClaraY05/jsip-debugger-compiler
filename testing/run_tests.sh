@@ -39,10 +39,14 @@ fi
 # config-independent invocation: this clone's configured prefix does not
 # exist, so drive ocamlc under the in-tree runtime and point everything
 # at the in-tree stdlib and vreplay library (see TEST.README.md)
+# -use-runtime because this clone has no installed runtime at all (any
+# ABI-compatible one would do: the wire primitives live in the vreplay
+# stubs DLL, not the runtime); -dllpath bakes that DLL's directory into
+# the executable so the produced test binaries are self-contained
 OCAMLC="runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay \
-    -use-runtime $PWD/runtime/ocamlrun"
-# native executables need no -use-runtime: they link this tree's
-# libasmrun.a, which already carries the wire primitives
+    -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay"
+# native executables link the stubs statically: -I vreplay doubles as
+# -L vreplay, resolving the -cclib -lvreplaynat recorded in vreplay.cmxa
 OCAMLOPT="runtime/ocamlrun ./ocamlopt -nostdlib -I stdlib -I vreplay"
 
 modes="byte"

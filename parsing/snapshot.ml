@@ -1,1 +1,0 @@
-external emit : string -> unit = "caml_wire_emit"
