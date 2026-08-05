@@ -29,7 +29,7 @@ via `.gitattributes:63-67`.
 ## 3. Expect pre-existing failures
 
 Project files historically failed checks — missing headers on
-`typing/vreplay_instrumentation.{ml,mli}` and `vreplay/snapshot.c`, long lines and
+`typing/vreplay_instrumentation.{ml,mli}` and `vreplay/src/snapshot.c`, long lines and
 trailing whitespace throughout `typing/vreplay_instrumentation.ml` — and are now
 exempted via `.gitattributes`.
 

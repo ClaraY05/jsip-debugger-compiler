@@ -1,3 +1,9 @@
+(* -visual-replay's typed-tree pass, one inner module per concern --
+   Wire (event fields + emit primitive), Catalogue (the unit tables),
+   Classify (which calls are events), Schema (ty + payload schemas),
+   Scope (binder identity), Inject (the AST rewrite).
+   [inject_instrumentation] at the bottom is the only export. *)
+
 (* the wire format: the record each event dumps, and the emit primitive
    every byte of the dump goes through *)
 module Wire = struct
@@ -69,7 +75,7 @@ module Wire = struct
   (* [external __wire_emit : string -> unit = "caml_wire_emit"], spliced
      per instrumented unit *)
   let emit_name = "__wire_emit"
-  let emit_c_name = "caml_wire_emit"  (* defined in runtime/snapshot.c *)
+  let emit_c_name = "caml_wire_emit"  (* defined in vreplay/src/snapshot.c *)
 
   let emit_decl =
     let ty id =
@@ -94,25 +100,15 @@ module Wire = struct
                ; pconst_loc = Location.none } ) ])
 end
 
-(* the result binding each instrumented call introduces *)
-let res_binder_name = "__vreplay_res"
-
-(* frame markers, summed into depth by the reader ({ +1, } -1); emitted
-   via [caml_wire_emit], never [Printf] (REVIEW_FINDINGS #2) *)
-let frame_open = "{"
-let frame_close = "}"
-
-(* ---- classification: which applications are events ---- *)
+(* ---- the catalogue tables: which units declare the tracked
+   representations, and which modules' calls observe them ---- *)
+module Catalogue = struct
 
 type mutability = Immutable | Mutable
 
-(* where an event's traversal root lives: the result, or the mutated
-   argument at that position of the argument list, read post-call *)
-type root = Result | Argument of int
-
 (* The unit a tracked structure's TYPE is declared in, and the catalogue
    name of the REPRESENTATION that type has -- these names MUST mirror
-   [Data_structure.of_name] in vreplay/data_structure.ml.  This is what
+   [Data_structure.of_name] in vreplay/src/data_structure.ml.  This is what
    names a root, because the module a call went through says nothing
    about what the call hands back: [Core.Linked_queue] hands back a
    [Stdlib.Queue.t], and [Queue.pop] on a queue of maps hands back a
@@ -262,6 +258,15 @@ let ds_table : (string * (mutability * string list)) list =
      immutable call observes its RESULT, whose own type decides how it
      is walked. *)
 
+end
+
+(* ---- classification: which applications are events ---- *)
+module Classify = struct
+
+(* where an event's traversal root lives: the result, or the mutated
+   argument at that position of the argument list, read post-call *)
+type root = Result | Argument of int
+
 (* declaring unit of a uid. [Subst] copies uids verbatim, so [Item]
    survives [Map.Make], [include], [open] and aliasing.
    [Local_opaque_item] (functor params, first-class modules) names the
@@ -305,7 +310,7 @@ let type_unit env ty =
     | decl ->
       let unit = uid_comp_unit decl.type_uid in
       begin match unit, aux with
-      | Some u, Some m when List.mem_assoc u ds_of_type_unit ->
+      | Some u, Some m when List.mem_assoc u Catalogue.ds_of_type_unit ->
         Some (u ^ "." ^ m)
       | (Some _ | None), _ -> unit
       end
@@ -339,7 +344,7 @@ let type_units (e : Typedtree.expression) =
    type. *)
 let structure_ds (e : Typedtree.expression) =
   List.find_map
-    (fun unit -> List.assoc_opt unit ds_of_type_unit)
+    (fun unit -> List.assoc_opt unit Catalogue.ds_of_type_unit)
     (type_units e)
 
 (* partial application: the call leaves an arrow *)
@@ -388,7 +393,7 @@ let classify (exp : Typedtree.expression)
     begin match uid_comp_unit vd.val_uid with
     | None -> []
     | Some comp_unit ->
-      begin match List.assoc_opt comp_unit ds_table with
+      begin match List.assoc_opt comp_unit Catalogue.ds_table with
       | None -> []
       | Some (mutability, operates) ->
         let result =
@@ -397,8 +402,8 @@ let classify (exp : Typedtree.expression)
           | None -> []
         in
         begin match mutability with
-        | Immutable -> result
-        | Mutable ->
+        | Catalogue.Immutable -> result
+        | Catalogue.Mutable ->
           if is_partial exp then []
           else argument_roots operates args @ result
         end
@@ -406,7 +411,11 @@ let classify (exp : Typedtree.expression)
     end
   | _ -> []
 
-(* ---- the static type each root carries ---- *)
+end
+
+(* ---- the [ty] and payload schemas each root carries, and the
+   user-declared-type test behind [ds_type User] ---- *)
+module Schema = struct
 
 (* [ty] printed as the user reads it at [env]: inside
    [wrap_printing_env] so paths shorten against the caller's scope
@@ -650,10 +659,10 @@ let is_user_declared_type env ty =
   | Types.Tconstr (path, _, _) ->
     begin match Env.find_type path env with
     | decl ->
-      begin match uid_comp_unit decl.type_uid with
+      begin match Classify.uid_comp_unit decl.type_uid with
       | Some unit ->
         not (is_stdlib_unit unit)
-        && not (List.mem_assoc unit ds_of_type_unit)
+        && not (List.mem_assoc unit Catalogue.ds_of_type_unit)
       | None -> false
       end
     | exception Not_found -> false
@@ -666,6 +675,8 @@ let is_user_declared_type env ty =
 let is_user_declared (e : Typedtree.expression) =
   is_user_declared_type e.exp_env e.exp_type
 
+end
+
 (* ---- scope: which binding a name means where an event fires ----
 
    The registry says what a structure is CALLED; that alone cannot tell
@@ -675,6 +686,7 @@ let is_user_declared (e : Typedtree.expression) =
    to at that program point.  A reader compares the two: they agree
    while the structure still answers to its name, and part company once
    a later [let] takes the name over or its scope is left behind. *)
+module Scope = struct
 
 (* A binding's identity: the unit that bound it, then the identifier
    with the stamp separating it from every other binding of that name --
@@ -706,9 +718,9 @@ let binder_at env ~file name =
    "out of scope" for a structure the program can still reach. *)
 let is_trackable env ty =
   List.exists
-    (fun unit -> List.mem_assoc unit ds_of_type_unit)
-    (type_units_of env ty)
-  || is_user_declared_type env ty
+    (fun unit -> List.mem_assoc unit Catalogue.ds_of_type_unit)
+    (Classify.type_units_of env ty)
+  || Schema.is_user_declared_type env ty
 
 (* the pass's own bindings, which are in scope at an injection point but
    are not the program's ([__vreplay_res], [__wire_emit]) *)
@@ -735,7 +747,19 @@ let scope_at env ~file =
        | _ -> acc)
     None env []
 
-(* ---- the injected observation ---- *)
+end
+
+(* ---- the injected observation and the typed-AST rewrite ---- *)
+module Inject = struct
+
+(* the result binding each instrumented call introduces *)
+let res_binder_name = "__vreplay_res"
+
+(* frame markers, summed into depth by the reader ({ +1, } -1); emitted
+   via [caml_wire_emit], never [Printf] -- the channel buffer would hold
+   them until exit and reorder them after every payload *)
+let frame_open = "{"
+let frame_close = "}"
 
 (* Build and type [Vreplay.snapshot ~loc ~fn ~ds ~args ~name ~binder
    ~scope ~ty <root>] in [env].  [root] is always a plain identifier --
@@ -774,7 +798,7 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~binder ~ty ~schema ~root =
   in
   let arg_triple (k, l, v) = tuple [ str k; str l; str v ] in
   let ty_pair (role, t) = tuple [ str role; str t ] in
-  let schema_entry e =
+  let schema_entry (e : Schema.schema_entry) =
     tuple [ list_of str e.labels; list_of int e.fields; int e.kind ]
   in
   let schema_role (role, i) = tuple [ str role; int i ] in
@@ -797,11 +821,11 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~binder ~ty ~schema ~root =
      the override is the identity. *)
   let binder =
     match binder with
-    | Some id -> binder_of_ident ~file id
-    | None -> binder_at env ~file name
+    | Some id -> Scope.binder_of_ident ~file id
+    | None -> Scope.binder_at env ~file name
   in
   let scope =
-    let visible = scope_at env ~file in
+    let visible = Scope.scope_at env ~file in
     if String.equal name "" || String.equal binder "" then visible
     else (name, binder) :: List.remove_assoc name visible
   in
@@ -832,8 +856,8 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~binder ~ty ~schema ~root =
 (* the identifier the post-call hook reads: the bound result, or the
    mutated argument (an ident, per [argument_roots]) *)
 let root_lid args = function
-  | Result -> Longident.Lident res_binder_name
-  | Argument i ->
+  | Classify.Result -> Longident.Lident res_binder_name
+  | Classify.Argument i ->
     begin match List.nth args i with
     | (_, Typedtree.Arg
            { Typedtree.exp_desc = Texp_ident (_, lid, _); _ }) -> lid.txt
@@ -843,8 +867,8 @@ let root_lid args = function
 (* the typed expression a root's static type is read off: the whole
    application for a Result, the argument at that position otherwise *)
 let root_expression (exp : Typedtree.expression) args = function
-  | Result -> exp
-  | Argument i ->
+  | Classify.Result -> exp
+  | Classify.Argument i ->
     begin match List.nth args i with
     | (_, Typedtree.Arg a) -> a
     | _ -> assert false (* [argument_roots] only returns [Arg] positions *)
@@ -972,9 +996,9 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
        variant, an abstract one) would dump an unlabelled block, which
        is no better than the numbering this replaces. *)
     match binder with
-    | Some (name, id, bound) when is_user_declared bound ->
-      let ((_ : schema_entry list), roles) as schema =
-        root_schema ~ds:user_ds bound
+    | Some (name, id, bound) when Schema.is_user_declared bound ->
+      let ((_ : Schema.schema_entry list), roles) as schema =
+        Schema.root_schema ~ds:Schema.user_ds bound
       in
       begin match roles with
       | [] -> vb
@@ -983,11 +1007,11 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
            rewritten by now, and printing that would put this pass's own
            injected code on the wire as the event's source text *)
         let wire = Wire.format_binding bound in
-        let ty = root_ty ~ds:user_ds bound in
+        let ty = Schema.root_ty ~ds:Schema.user_ds bound in
         let hooks =
           [ (fun env ->
                snapshot_call env ~loc:wire.Wire.location
-                 ~fn:wire.Wire.function_info ~ds:user_ds
+                 ~fn:wire.Wire.function_info ~ds:Schema.user_ds
                  ~args:wire.Wire.argument_list ~name ~binder:(Some id) ~ty
                  ~schema ~root:(Longident.Lident res_binder_name)) ]
         in
@@ -1004,7 +1028,7 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
     let recurse_down : Typedtree.expression = super.expr self exp in
     match exp.exp_desc with
     | Texp_apply (func, args) ->
-      begin match classify exp func args with
+      begin match Classify.classify exp func args with
       | [] -> recurse_down
       | roots ->
         let wire = Wire.format_function_call exp func args in
@@ -1022,19 +1046,19 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
                   which binding that is *)
                let name, binder =
                  match root with
-                 | Result ->
+                 | Classify.Result ->
                    begin match result_binding with
                    | Some (name, id) -> (name, Some id)
                    | None -> ("", None)
                    end
-                 | Argument _ ->
+                 | Classify.Argument _ ->
                    ( Format.asprintf "%a" Pprintast.longident
                        (root_lid args root)
                    , None )
                in
                let root_exp = root_expression exp args root in
-               let ty = root_ty ~ds root_exp in
-               let schema = root_schema ~ds root_exp in
+               let ty = Schema.root_ty ~ds root_exp in
+               let schema = Schema.root_schema ~ds root_exp in
                let root = root_lid args root in
                fun env ->
                  snapshot_call env ~loc:wire.Wire.location
@@ -1052,6 +1076,8 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
     Tast_mapper.expr = inject_expression
   ; value_binding = inject_value_binding }
 
+end
+
 (* exposed for compile_common *)
 let inject_instrumentation ~inject (tast : Typedtree.implementation) =
   if not inject then tast
@@ -1067,7 +1093,7 @@ let inject_instrumentation ~inject (tast : Typedtree.implementation) =
     let emit_prim, _env =
       Typedecl.transl_value_decl decl_env Location.none Wire.emit_decl
     in
-    let mapper = inject_mapper emit_prim in
+    let mapper = Inject.inject_mapper emit_prim in
     let structure = mapper.Tast_mapper.structure mapper structure in
     let emit_item : Typedtree.structure_item =
       { str_desc = Typedtree.Tstr_primitive emit_prim

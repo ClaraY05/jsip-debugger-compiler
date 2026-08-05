@@ -40,7 +40,7 @@ runtime/ocamlrun ./tools/ocamlobjinfo compilerlibs/ocamlcommon.cma \
 ## 3. If it did not relink
 
 The historical cause (a bad `parsing_SOURCES` prefix on a `snapshot` unit) is fixed and
-the unit itself is gone — the wire primitives now live in `vreplay/snapshot.c`, built
+the unit itself is gone — the wire primitives now live in `vreplay/src/snapshot.c`, built
 into the vreplay stubs archives, not in any compilerlibs unit or the runtime. A build
 that dies at startup with `unknown C primitive` means stale bytecode binaries against a
 regenerated primitives table: `make partialclean && make world`.

@@ -63,18 +63,17 @@ lost. (Line numbers drift; the symbol names don't.)
 |---|---|
 | `typing/vreplay_instrumentation.ml` / `.mli` | **The heart.** A `Tast_mapper` that rewrites each `Texp_apply` that `classify` marks as a DS event: frame markers, result binding, payload schemas derived from the user's type declarations, and a post-call `Vreplay.snapshot` hand-off. |
 | `driver/compile_common.ml:97` | The hookpoint — one line, pipes the typed AST through the mapper. |
-| `vreplay/snapshot.c` | Defines `caml_wire_emit` (writes to the dump sink; framing is the OCaml side's job) and `caml_wire_traverse`, the no-allocation BFS walker that builds each event's `node` tree. Compiled into the library's own C-stubs archives (`libvreplay{byt,nat}.a` + the stubs DLL), **not** into the runtime — so any ABI-compatible runtime resolves the primitives. |
-| `vreplay/` | **The runtime library** linked into instrumented programs: `data_structure.{ml,mli}` (the catalogue: which DSs are walkable and their per-layer interior/payload layouts), `sexp.{ml,mli}` (sexp AST + printer/parser + **the wire schema** + `to_sexp`/`from_sexp`), `vreplay.{ml,mli}` (weak registry, dump sink, and `snapshot`, the injected entry point). Built by `make vreplay` (part of `world`) into `vreplay/vreplay.cma`. |
+| `vreplay/src/snapshot.c`, `wire_sink.c` | The C stubs: `snapshot.c` defines `caml_wire_traverse`, the no-allocation BFS walker that builds each event's `node` tree; `wire_sink.c` defines `caml_wire_emit` (opens and writes the dump sink; framing is the OCaml side's job). Compiled into the library's own C-stubs archives (`libvreplay{byt,nat}.a` + the stubs DLL), **not** into the runtime — so any ABI-compatible runtime resolves the primitives. |
+| `vreplay/src/` | **The runtime library** linked into instrumented programs, five units: `data_structure.{ml,mli}` (the catalogue: which DSs are walkable and their per-layer interior/payload layouts), `sexp.{ml,mli}` (sexp AST + printer/parser + **the wire schema** + `to_sexp`/`from_sexp`), `vreplay_layout.{ml,mli}` (layout flattening to the C-ready arrays — the field-order contract with the walker), `vreplay_registry.{ml,mli}` (the weak registry and member store), `vreplay.{ml,mli}` (the façade: externals, event assembly, and `snapshot`, the injected entry point). Built by `make vreplay` (part of `world`) into `vreplay/src/vreplay.cma`. |
 | `bytecomp/bytelink.ml:935`, `asmcomp/asmlink.ml:349`, `driver/compmisc.ml:48` | Flag-gated linking: `vreplay.cma` / `vreplay.cmxa` is prepended after the stdlib archive, and `+vreplay` joins the load path, only under `-visual-replay`. |
 | `utils/clflags.ml:253`, `.mli:221` | `let visual_replay = ref false` |
 | `driver/main_args.ml:692` + 5 module lists | `-visual-replay` flag wiring. |
 | `Makefile:172`, `:872` | Build wiring; `:172` puts the instrumentation in `ocamlcommon`, `:872` is the `vreplay` library block — the OCaml halves plus, via `ocamlmklib`, the C stubs archives whose `-dllib`/`-cclib` records ride inside `vreplay.cma`/`.cmxa`. |
-| `testing/` | The project's own test suite: golden dumps (49 cases), their programs, the Base/Core mocks, and `check_dump.ml`. See `testing/README.md`. |
+| `vreplay/tests/` | The project's own test suite: golden dumps (49 cases), their programs, the Base/Core stubs (`core_stubs/`), and `check_dump.ml`. See `vreplay/tests/README.md`. |
 
-**`REVIEW_FINDINGS.md` no longer exists** (deleted in `ff240449a1`). Several
-in-repo docs still cite it by number — `testing/README.md` mentions
-"REVIEW_FINDINGS #3" for the exception bug. Those are dangling references;
-the live summary is "Known broken" below.
+**`REVIEW_FINDINGS.md` no longer exists** (deleted in `ff240449a1`), and as
+of the 2026-08-05 doc cleanup nothing in the tree cites it any more; the
+live summary of known issues is "Known broken" below.
 
 ---
 
@@ -99,7 +98,7 @@ make -j4 world         # full/incremental build (bytecode). This machine has 4 c
 
 - **Native is supported too.** `make world` is bytecode only; a follow-up
   `make -j4 opt` adds `ocamlopt`, the native runtime/libraries, and
-  `vreplay/vreplay.cmxa`, after which `-visual-replay` links its runtime
+  `vreplay/src/vreplay.cmxa`, after which `-visual-replay` links its runtime
   into native executables as well. The instrumentation itself is shared
   (`compile_common` feeds both backends), so bytecode-only work still only
   needs `make world`.
@@ -162,16 +161,16 @@ runtime/ocamlrun ./tools/ocamlobjinfo compilerlibs/ocamlcommon.cma
 
 For compiling, also note that depending on how the tree was configured
 `standard_library` may point somewhere unpopulated, so use the
-config-independent invocation (`TEST.README.md` has the long-form version,
-verified in-tree):
+config-independent invocation (`vreplay/tests/README.md` has the
+long-form version, verified in-tree):
 
 ```sh
-runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
-  -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay \
+runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay/src -visual-replay \
+  -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay/src \
   -o /tmp/t.out /tmp/t.ml
 ```
 
-`-I vreplay` is needed because the injected call references `Vreplay`: while
+`-I vreplay/src` is needed because the injected call references `Vreplay`: while
 `compmisc` adds `+vreplay` to the load path, that resolves under
 `standard_library`, where nothing installs the library from a plain build.
 `-use-runtime` is needed only because this clone has no installed runtime
@@ -185,13 +184,13 @@ The native equivalent (needs `make opt` to have run; `ocamlopt` is itself
 a bytecode executable, so it too runs under `runtime/ocamlrun`):
 
 ```sh
-runtime/ocamlrun ./ocamlopt -nostdlib -I stdlib -I vreplay -visual-replay \
+runtime/ocamlrun ./ocamlopt -nostdlib -I stdlib -I vreplay/src -visual-replay \
   -o /tmp/t.out /tmp/t.ml
 ```
 
 No `-use-runtime` and no `-dllpath` here: native links the stubs
 statically — `vreplay.cmxa` carries `-cclib -lvreplaynat`, and
-`-I vreplay` doubles as `-L vreplay`, so `caml_wire_emit`/
+`-I vreplay/src` doubles as `-L vreplay/src`, so `caml_wire_emit`/
 `caml_wire_traverse` resolve from `libvreplaynat.a` at C link time. A
 stock `libasmrun` works; the executable is fully self-contained.
 
@@ -203,7 +202,7 @@ at whatever path the tree was configured with).
 ### Where the dump goes — *not* stdout
 
 The instrumented program picks its sink at the first event, from the
-environment (`vreplay/vreplay.ml`; `README_vreplay.md` documents it):
+environment (`vreplay/src/vreplay.ml`):
 
 - `VREPLAY_SOCK=<path>` — connect a Unix domain stream socket (a live
   listener, e.g. the debugger interface). A failed connect warns on stderr
@@ -229,15 +228,15 @@ file at all**, not an empty one:
 
 ```sh
 printf 'let g x = x + 1\nlet f x = x + 2\nlet () = ignore (f (g 1))\n' > /tmp/neg.ml
-runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
-  -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay \
+runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay/src -visual-replay \
+  -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay/src \
   -o /tmp/neg.out /tmp/neg.ml
 rm -f /tmp/neg.dump
 VREPLAY_FILE=/tmp/neg.dump /tmp/neg.out
 test ! -e /tmp/neg.dump && echo "no events, as expected"
 ```
 
-(`testing/expected/neg_*.dump` are 0-byte files because `run_tests.sh:70`
+(`vreplay/tests/expected/neg_*.dump` are 0-byte files because `run_tests.sh`
 truncates the dump into existence before the run; the runtime does not.)
 
 Positive — a Map program. Three events fire (the two `M.add` and the
@@ -254,8 +253,8 @@ let () =
   let m = M.remove "a" m in
   ignore (M.find "b" m)
 EOF
-runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay -visual-replay \
-  -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay \
+runtime/ocamlrun ./ocamlc -nostdlib -I stdlib -I vreplay/src -visual-replay \
+  -use-runtime $PWD/runtime/ocamlrun -dllpath $PWD/vreplay/src \
   -o /tmp/t.out /tmp/t.ml
 VREPLAY_FILE=/tmp/t.dump /tmp/t.out && cat /tmp/t.dump
 ```
@@ -297,25 +296,25 @@ is `children`'s next node.
 
 ### Tests
 
-The project's own tests live in **`testing/`** — golden-dump cases plus a
+The project's own tests live in **`vreplay/tests/`** — golden-dump cases plus a
 structural checker. Run them after any change to the instrumentation, the
-vreplay library, or `vreplay/snapshot.c`:
+vreplay library, or `vreplay/src/snapshot.c`:
 
 ```sh
-testing/run_tests.sh              # everything (needs a built tree)
-testing/run_tests.sh map_basic    # selected cases
-testing/run_tests.sh --promote    # re-bless expected/ after a deliberate change
+vreplay/tests/run_tests.sh              # everything (needs a built tree)
+vreplay/tests/run_tests.sh map_basic    # selected cases
+vreplay/tests/run_tests.sh --promote    # re-bless expected/ after a deliberate change
 ```
 
 `check_dump` validates structure **before** the golden diff — wrapper
 fields, sexp round-trip, depth balance, and the sharing invariants — so a
 `--promote` only rewrites goldens that were already well formed. Addresses
 are canonicalized for the comparison only, so goldens stay verbatim run
-output and double as the interface repo's parser fixtures. `testing/README.md`
+output and double as the interface repo's parser fixtures. `vreplay/tests/README.md`
 lists what the cases cover.
 
 **When the tree has a native compiler, every case runs twice.** If `ocamlopt`
-and `vreplay/vreplay.cmxa` exist (i.e. `make opt` has run), the suite
+and `vreplay/src/vreplay.cmxa` exist (i.e. `make opt` has run), the suite
 compiles and runs each case under both backends against the **same**
 `expected/` dumps — the wire is backend-independent, so byte and native
 output must agree up to the address bijection. Without them the native pass
@@ -325,14 +324,15 @@ reports `50 passed` (49 cases + the socket-sink smoke test) and a full one
 re-blesses from the bytecode run only, and the native pass then re-checks
 against the freshly promoted goldens.
 
-**`testing/mock/` is how the Base/Core cases run at all.** This tree has no
+**`vreplay/tests/core_stubs/` is how the Base/Core cases run at all.** (Formerly
+`mock/`.) This tree has no
 opam switch and no Core installed, so the suite compiles miniature stand-ins
 that reuse the *real unit names and representations*
-(`base__Map.ml`, `core__Deque.ml`, …) into a `mocks.cma` and compiles the
+(`base__Map.ml`, `core__Deque.ml`, …) into a `stubs.cma` and compiles the
 `core_*` cases against it. That is enough to exercise `ds_table`'s
 provenance matching and the walker's layouts in CI. It is not enough to
 prove anything about the genuine Core layouts — for that, use the
-`jsip-vreplay` switch below. When you add a Core entry, add its mock unit
+`jsip-vreplay` switch below. When you add a Core entry, add its stub unit
 and its case together.
 
 The upstream testsuite has **no** `-visual-replay` coverage:
@@ -344,26 +344,27 @@ make -C testsuite one DIR=tests/<area>      # one directory
 
 ### The `jsip-vreplay` opam switch
 
-`README_opam_switch.md` sets up a switch whose *compiler is this fork*, with
+`README_opam_switch.md` (deleted in the doc refresh; recover it from git
+history at `3a8a253c40`) set up a switch whose *compiler is this fork*, with
 Base/Core/ppx_jane built against it (matching CMI magic by construction), so
 `ocamlc -visual-replay` works as an ordinary installed compiler on real
 Core-using programs. Bytecode-only by design. It takes ~1h to build; it is
 the only way to check the Core catalogue entries against *real* Core layouts
-rather than `testing/mock/`'s stand-ins. Needs at least `b3dd6d23a1` on the
+rather than `vreplay/tests/core_stubs/`'s stand-ins. Needs at least `b3dd6d23a1` on the
 branch.
 
 **The switch installed on this machine (`~/.opam/jsip-vreplay`) is stale and
-emits nothing.** Verified 2026-08-03: `testing/cases/map_basic.ml` through
+emits nothing.** Verified 2026-08-03: `vreplay/tests/cases/map_basic.ml` through
 that switch produces `{}{}{}` — frames, no records — while the same case in
 an in-tree build is fine, so it is the install, not the branch. Copying
-fresh `vreplay/*.cmi *.cma` into `<switch>/lib/ocaml/vreplay/` does **not**
+fresh `vreplay/src/*.cmi *.cma` into `<switch>/lib/ocaml/vreplay/` does **not**
 fix it (and overwrites the originals); it needs
 `opam reinstall --switch=jsip-vreplay ocaml-variants` off current
 `vreplay-main`. Until then, the cheaper way to test against real Core is to
 build in-tree and drive `ocamlfind ocamlc -package core -linkpkg
 -visual-replay` with `OCAMLFIND_COMMANDS=ocamlc=<wrapper>`, the wrapper
 running this tree's `ocamlc` under its own `ocamlrun` against the switch's
-`lib/ocaml`. Re-copy the tree's `vreplay/` artifacts into the switch after
+`lib/ocaml`. Re-copy the tree's `vreplay/src/` artifacts into the switch after
 every rebuild — the layouts live there, and a stale copy silently tests the
 old catalogue.
 
@@ -371,7 +372,7 @@ old catalogue.
 
 ## The wire format contract
 
-**`vreplay/sexp.mli` is the spec — read it in full before changing anything
+**`vreplay/src/sexp.mli` is the spec — read it in full before changing anything
 about serialization.** It is a prose specification as much as an interface:
 the block-representation table, the delta/sharing rules, the registry
 format, and the `ty` shape are all documented there.
@@ -446,12 +447,12 @@ code that relies on one.**
 On the interface side, `[@sexp.allow_extra_fields]` is set **only** on the
 event wrapper, so adding a wrapper field is backward compatible while adding
 a nested field is not. After any deliberate change: `run_tests.sh --promote`
-here, then re-vendor `testing/` into the interface repo.
+here, then re-vendor `vreplay/tests/` into the interface repo.
 
-Note `instrument_call` takes `?inject_before` / `?inject_after` as closures
-producing **arbitrary already-typed expressions** and knows nothing about
-what they do. Keep it that way; don't push payload assumptions back into it.
-It owns only the `{}` markers.
+Note `Inject.instrument_call` takes `~inject_after` as closures producing
+**arbitrary already-typed expressions** and knows nothing about what they
+do. Keep it that way; don't push payload assumptions back into it. It owns
+only the `{}` markers.
 
 ### What is tracked
 
@@ -460,7 +461,7 @@ places.
 
 **1. Catalogued container calls.** `ds_table` in
 `typing/vreplay_instrumentation.ml` maps a *declaring compilation unit* to
-`(mutability, catalogue names)`; `vreplay/data_structure.mli` holds the
+`(mutability, catalogue names)`; `vreplay/src/data_structure.mli` holds the
 layouts. **Extend both together** — a unit named without a layout no-ops at
 runtime, and a layout nothing maps to is dead.
 
@@ -490,7 +491,7 @@ Three rules worth internalizing:
   `Base__Map_intf` rather than `Base__Map`, so omitting the `_intf` entry
   silently tracks nothing. This has cost real time twice: `Core.Bag.t`
   resolves to `Core__Bag_intf`, not to `Core__Doubly_linked` as the
-  `include` suggests, and the mocks agreed with the wrong answer.
+  `include` suggests, and the stubs agreed with the wrong answer.
 - **An auxiliary type is *qualified*, not excluded.** A type declared beside
   a container's own `t` shares its unit, so `type_unit` returns it under the
   submodule it was reached through — `Base__Map.Tree`, not `Base__Map`. The
@@ -499,12 +500,12 @@ Three rules worth internalizing:
   (`Core__Doubly_linked.Elt`, `Base__Map.Comparator`) matching nothing.
   Qualification only kicks in when the *unqualified* unit is already in
   `ds_of_type_unit`, so a user module named `Tree` is unaffected —
-  `testing/cases/user_aux_module_name.ml` is the test.
+  `vreplay/tests/cases/user_aux_module_name.ml` is the test.
 
 A catalogue entry's *layout* is a list of layers, root first, and the walker
 tells skeleton from user data by the **edge** it arrived through, never by a
 block's shape. The pieces, each documented in place in
-`vreplay/data_structure.mli`:
+`vreplay/src/data_structure.mli`:
 
 - `Fixed` for a node of one exact size (`labels` + an `interior` and a
   `payload` bitmask; unmarked fields are bookkeeping and never reach the
@@ -567,7 +568,7 @@ layout. Three conditions, all deliberate:
 
 So bare `list`/`array`/tuple values are *contents, not subjects*: never
 events themselves, drawn only when reached from something that is.
-`testing/cases/user_types.ml` is the readable statement of all of this,
+`vreplay/tests/cases/user_types.ml` is the readable statement of all of this,
 negatives included.
 
 Because `User` is a `Data_structure.t` constructor, **the interface's
@@ -586,7 +587,7 @@ call. The recommended fix is to carry depth as an explicit event field and
 drop closing markers entirely — a truncated dump is then still well formed
 and an unwind is just the next record's depth jumping backwards. Re-raising
 from a `Texp_try` is the wrong first move: it corrupts the user program's
-backtraces. `testing/` deliberately has no case for this.
+backtraces. `vreplay/tests/` deliberately has no case for this.
 
 **2. The `-visual-replay` help text is mangled.** `driver/main_args.ml:693`
 has a literal newline inside the string, so `ocamlc -help` prints it across
@@ -604,7 +605,7 @@ remains unimplemented.
 **4. `dune build` cannot succeed.** The root `dune` still lists a `vreplay`
 module from the stub era (`Error: Module Vreplay doesn't exist`), and none
 of the files this project actually edits — `vreplay_instrumentation`, the
-`vreplay/` library trio — appear in **any** dune file, so Merlin/ocamllsp
+`vreplay/src/` library units — appear in **any** dune file, so Merlin/ocamllsp
 report "No config found" on exactly the files this project works on. Since
 dune is only a Merlin helper here, that's backwards.
 
@@ -620,7 +621,7 @@ dune is only a Merlin helper here, that's backwards.
 - *`wire_external` unreachable.* It lives at the top level of
   `vreplay_instrumentation.ml` now.
 - *The dump interleaving with the program's stdout.* Fixed by the dedicated
-  sink; `testing/cases/stdout_mixed.ml` covers it.
+  sink; `vreplay/tests/cases/stdout_mixed.ml` covers it.
 - *Unfiltered instrumentation.* `filter_func` (which returned `true`
   unconditionally) became `classify`, described above.
 
@@ -640,13 +641,13 @@ no lines over 80 columns, no tabs, ASCII only, newline at EOF.
 
 License headers: new `.ml`/`.mli`/`.c` files normally need the 14-line OCaml
 block (copy it from `typing/typecore.ml:1-14`), but **this project's files
-are exempted instead** — `.gitattributes:28-37` lists `/vreplay/*` (which
-covers `vreplay/snapshot.c`), both `vreplay_instrumentation` files,
-`testing/`'s sources and mocks, and `/.claude/*` as
+are exempted instead** — `.gitattributes:28-37` lists `/vreplay/src/*` (which
+covers `vreplay/src/snapshot.c`), both `vreplay_instrumentation` files,
+`vreplay/tests/`'s sources and stubs, and `/.claude/*` as
 `typo.missing-header=may`. A new project file — or a new project
 *directory*, which is the one that gets missed — needs either the header or
 a line there. `.md` files are exempt from the header, long-line and
-non-ASCII checks (`.gitattributes:79,90`), and `/testing/expected/*.dump`
+non-ASCII checks (`.gitattributes:79,90`), and `/vreplay/tests/expected/*.dump`
 additionally from the long-line and final-newline checks, since it is
 byte-exact machine output.
 
@@ -725,7 +726,7 @@ of noise. Three things learned the hard way:
 One PR is open against `vreplay-main` and worth knowing about before
 starting anything adjacent:
 
-- **#9 (open since July)** adds the component suites under `testing/unit/`.
+- **#9 (open since July)** adds the component suites under `vreplay/tests/unit/`.
 
 Commit style is informal and mixed (`feat:`/`fix:` alongside freeform).
 Match whatever the surrounding history does; don't impose a convention.
@@ -803,20 +804,21 @@ lines, and it is worth keeping it that way.
 
 ## Further reading
 
-- **`vreplay/sexp.mli`** — the wire schema and its prose spec. The single
+- **`README.md`** — the fork's front page (GitHub renders it instead of
+  upstream's `README.adoc`): what the flag does, quick start, and the
+  inventory of what changed vs upstream.
+- **`vreplay/src/sexp.mli`** — the wire schema and its prose spec. The single
   most important file to read before touching serialization.
-- **`README_C_Contributions.md`** — genuinely excellent 450-line in-repo
-  guide to writing C in this tree: the `CAMLparam`/`CAMLlocal`/`CAMLreturn`
-  GC contract, primitive registration, tag tables, debugging with
-  `-runtime-variant d` and `OCAMLRUNPARAM='s=4k'`. **Read it before touching
-  `runtime/`.**
-- **`TEST.README.md`** — verified end-to-end commands for building and
-  running the flag by hand.
-- **`README_opam_switch.md`** — the `jsip-vreplay` switch (this fork as an
-  installed compiler, with Core built against it).
-- **`testing/README.md`** — what the golden suite checks and covers.
+- **`vreplay/src/README.md`** — the library's own doc: the catalogue, one entry
+  per representation, and the walker's layout vocabulary.
+- **`vreplay/tests/README.md`** — what the golden suite checks and covers,
+  plus verified end-to-end commands for running the flag by hand (absorbed
+  the former `TEST.README.md`).
 - `HACKING.adoc` — upstream's build/dev guide.
-- `README_vreplay.md` — **half stale.** Its "Where the dump goes" section is
-  current and authoritative; everything above it describes a layout from
-  before the code moved to `typing/` and gives an invocation that no longer
-  works.
+
+Deleted in the 2026-08-05 doc refresh (recover from git history at
+`3a8a253c40` if their content is needed before it finds a new home):
+`README_C_Contributions.md` (the C/GC contract guide — read it from history
+before touching `runtime/` or `snapshot.c`), `README_opam_switch.md` (the
+`jsip-vreplay` switch setup), and `README_vreplay.md` (its live half, the
+dump-sink docs, now lives only in this file and `vreplay/src/vreplay.ml`).
