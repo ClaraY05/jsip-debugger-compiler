@@ -1,4 +1,4 @@
-(* Core Bag (vreplay/tests/core_stubs/core__Bag.ml): a doubly-linked list under
+(* Core Bag (core_stubs/core__Bag.ml): a doubly-linked list under
    another name -- core's bag.ml includes Doubly_linked wholesale, so a
    bag carries that type and walks with its layout while the calls are
    Bag's own.  [add] hands back the element it made, and the catalogue

@@ -1,4 +1,4 @@
-(* Base/Core Map (vreplay/tests/core_stubs/base__Map.ml): a {comparator; tree}
+(* Base/Core Map (core_stubs/base__Map.ml): a {comparator; tree}
    record over Leaf/Node blocks of different sizes -- the comparator
    holds closures and never reaches the wire, and the two tree shapes
    are what a one-shape layer could not describe. *)

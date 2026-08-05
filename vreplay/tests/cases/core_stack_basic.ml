@@ -1,4 +1,4 @@
-(* Base/Core Stack (vreplay/tests/core_stubs/base__Stack.ml): a preallocated array
+(* Base/Core Stack (core_stubs/base__Stack.ml): a preallocated array
    holding the stack bottom-first.  The window walks it backwards, so
    the wire reads top-first the way a list-backed stack does. *)
 module Stack = Base__Stack

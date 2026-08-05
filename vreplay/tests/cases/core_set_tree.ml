@@ -1,4 +1,4 @@
-(* Base Set.Tree (vreplay/tests/core_stubs/base__Set.ml): the set's tree with no
+(* Base Set.Tree (core_stubs/base__Set.ml): the set's tree with no
    comparator record around it, walked as the set's tree layer alone.
    The two Tree entries share the parents' shapes rather than restating
    them, so a set tree and a set's tree cannot drift apart. *)

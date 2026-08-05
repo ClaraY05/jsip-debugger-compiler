@@ -1,4 +1,4 @@
-(* Base Map.Tree (vreplay/tests/core_stubs/base__Map.ml): the map's tree held with
+(* Base Map.Tree (core_stubs/base__Map.ml): the map's tree held with
    no comparator record around it.  It is declared beside the map and
    shares its compilation unit, so the [Tree] component of the type's
    path is the only thing telling the two apart -- and what reaches the

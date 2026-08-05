@@ -1,4 +1,4 @@
-(* Base/Core Hash_set (vreplay/tests/core_stubs/base__Hash_set.ml): the values ARE
+(* Base/Core Hash_set (core_stubs/base__Hash_set.ml): the values ARE
    a Hashtbl's -- same record, same bucket array, same AVL trees, with
    unit for every value -- but the type is the hash set's own, so the
    catalogue walks it as Core_hash_set and the interface can render it

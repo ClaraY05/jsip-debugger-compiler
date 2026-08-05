@@ -1,4 +1,4 @@
-(* Core Union_find (vreplay/tests/core_stubs/core__Union_find.ml): an inverted
+(* Core Union_find (core_stubs/core__Union_find.ml): an inverted
    forest.  Each node holds a pointer UPWARDS -- [parent] steps back to
    another node's own record, the one place a layout walks backwards --
    until a root carrying the value the class shares.  Nodes united onto

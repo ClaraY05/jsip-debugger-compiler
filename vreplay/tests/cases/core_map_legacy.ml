@@ -1,5 +1,5 @@
 (* The same catalogue entry over Base v0.16's shape
-   (vreplay/tests/core_stubs/core__Map.ml): a three-field root and AVL tuple nodes.
+   (core_stubs/core__Map.ml): a three-field root and AVL tuple nodes.
    One layout describes both because its layers list every shape they
    accept -- a library version bump does not have to move the wire. *)
 module Map = Core__Map

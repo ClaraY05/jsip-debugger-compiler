@@ -1,4 +1,4 @@
-(* Base/Core Linked_queue (vreplay/tests/core_stubs/base__Linked_queue.ml) is a
+(* Base/Core Linked_queue (core_stubs/base__Linked_queue.ml) is a
    STDLIB queue wearing another module's name.  The catalogue follows
    the root's type, so these events are ds_type Queue, walked with the
    stdlib queue's layout -- the module a call went through decides

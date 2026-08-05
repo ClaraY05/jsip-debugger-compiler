@@ -1,4 +1,4 @@
-(* Base/Core Queue (vreplay/tests/core_stubs/base__Queue.ml): a ring buffer.  The
+(* Base/Core Queue (core_stubs/base__Queue.ml): a ring buffer.  The
    dequeues move [front] far enough that the last enqueues wrap around
    the end of the array -- the wire must still read in queue order, and
    must not show the sentinel in the slots nobody is using. *)

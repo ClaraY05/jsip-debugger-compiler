@@ -1,4 +1,4 @@
-(* Core Hash_queue (vreplay/tests/core_stubs/core__Hash_queue.ml): a doubly-linked
+(* Core Hash_queue (core_stubs/core__Hash_queue.ml): a doubly-linked
    list of key/value pairs in queue order, indexed by a hash table that
    points AT those same elements.  The table is bookkeeping -- walking
    it would dump every pair a second time -- so what reaches the wire is

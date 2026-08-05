@@ -1,4 +1,4 @@
-(* Base/Core Hashtbl (vreplay/tests/core_stubs/base__Hashtbl.ml): record -> bucket
+(* Base/Core Hashtbl (core_stubs/base__Hashtbl.ml): record -> bucket
    ARRAY -> AVL tree, three layers deep, where the stdlib's buckets are
    a chain.  Node and Leaf differ in size AND tag. *)
 module Hashtbl = Base__Hashtbl

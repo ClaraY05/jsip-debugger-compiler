@@ -1,4 +1,4 @@
-(* Core Fdeque (vreplay/tests/core_stubs/core__Fdeque.ml): {front; back; length}
+(* Core Fdeque (core_stubs/core__Fdeque.ml): {front; back; length}
    over two ordinary lists, both walked with the same cell layer.
    Immutable, so each call observes only what it returns. *)
 module Fdeque = Core__Fdeque

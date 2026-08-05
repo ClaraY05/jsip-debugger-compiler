@@ -1,4 +1,4 @@
-(* Core Deque (vreplay/tests/core_stubs/core__Deque.ml): a ring buffer whose live
+(* Core Deque (core_stubs/core__Deque.ml): a ring buffer whose live
    range starts one past [front_index] and wraps modulo the array's own
    length -- five slots, no mask to land on.  Enqueuing at the front
    walks [front_index] backwards off the start of the array. *)

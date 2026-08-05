@@ -1,4 +1,4 @@
-(* Base/Core Set (vreplay/tests/core_stubs/base__Set.ml): the same wrapper record as
+(* Base/Core Set (core_stubs/base__Set.ml): the same wrapper record as
    the map, over one-payload Leaf/Node blocks. *)
 module Set = Base__Set
 

@@ -1,4 +1,4 @@
-(* Core Doubly_linked (vreplay/tests/core_stubs/core__Doubly_linked.ml): a ref over
+(* Core Doubly_linked (core_stubs/core__Doubly_linked.ml): a ref over
    elements chained circularly.  The last element's [next] is the head
    again -- already walked, so it lands as a second parent of the head's
    node rather than looping forever. *)
