@@ -1,6 +1,8 @@
 (* Validates a -visual-replay dump.  Every line must be a leading run of
    {} depth markers followed by at most one event sexp; every event must
-   have the seven wrapper fields in order; every snapshot must round-trip
+   have the wrapper fields in order (the binder is omitted for a root
+   observed under no name, and must be in the event's own scope
+   otherwise); every snapshot must round-trip
    through Vreplay.from_sexp/to_sexp; depth must return to 0 at EOF.
    Structure-sharing invariants, dump-global: a node id is defined once
    -- it may reappear only as an event's ROOT (a re-observation), and
@@ -88,16 +90,46 @@ let () =
          in
          match sexp with
          | Sexp.List
-             [ Sexp.Atom "event"
-             ; Sexp.List [ Sexp.Atom "id"; Sexp.Atom _ ]
-             ; Sexp.List [ Sexp.Atom "loc"; Sexp.List _ ]
-             ; Sexp.List
-                 [ Sexp.Atom "fn"
-                 ; Sexp.List [ Sexp.Atom _; Sexp.Atom _ ] ]
-             ; Sexp.List [ Sexp.Atom "args"; Sexp.List args ]
-             ; Sexp.List [ Sexp.Atom "registry"; Sexp.List reg ]
-             ; Sexp.List [ Sexp.Atom "ty"; Sexp.List ty ]
-             ; Sexp.List [ Sexp.Atom "snapshot"; snap ] ] ->
+             (Sexp.Atom "event"
+              :: Sexp.List [ Sexp.Atom "id"; Sexp.Atom _ ]
+              :: Sexp.List [ Sexp.Atom "loc"; Sexp.List _ ]
+              :: Sexp.List
+                   [ Sexp.Atom "fn"
+                   ; Sexp.List [ Sexp.Atom _; Sexp.Atom _ ] ]
+              :: Sexp.List [ Sexp.Atom "args"; Sexp.List args ]
+              :: Sexp.List [ Sexp.Atom "registry"; Sexp.List reg ]
+              :: Sexp.List [ Sexp.Atom "ty"; Sexp.List ty ]
+              :: tail) ->
+           (* the tail is [binder]-then-[scope]-then-[snapshot], with the
+              binder omitted for a root observed under no name *)
+           let binder, scope, snap =
+             match tail with
+             | [ Sexp.List [ Sexp.Atom "binder"; Sexp.Atom b ]
+               ; Sexp.List [ Sexp.Atom "scope"; Sexp.List scope ]
+               ; Sexp.List [ Sexp.Atom "snapshot"; snap ] ] ->
+               (Some b, scope, snap)
+             | [ Sexp.List [ Sexp.Atom "scope"; Sexp.List scope ]
+               ; Sexp.List [ Sexp.Atom "snapshot"; snap ] ] ->
+               (None, scope, snap)
+             | _ -> fail !lineno "malformed event wrapper"
+           in
+           List.iter
+             (function
+               | Sexp.List [ Sexp.Atom _; Sexp.Atom _ ] -> ()
+               | _ -> fail !lineno "malformed scope entry")
+             scope;
+           (* the scope an event carries is the one JUST AFTER it, so a
+              binding it states is what its own name means there -- the
+              invariant a missing override would break *)
+           (match binder with
+            | None -> ()
+            | Some b ->
+              let binds = function
+                | Sexp.List [ Sexp.Atom _; Sexp.Atom v ] -> String.equal v b
+                | _ -> false
+              in
+              if not (List.exists binds scope) then
+                fail !lineno "event binder is not in its own scope");
            List.iter
              (function
                | Sexp.List (Sexp.Atom _ :: _ :: _) -> ()
