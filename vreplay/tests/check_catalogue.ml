@@ -1,9 +1,6 @@
-(* The catalogue round-trip check: every name the instrumentation's
-   [Catalogue.table] can emit as an event's [ds] must resolve in the
-   runtime library's [Data_structure.of_name].  An unmatched name is a
-   silent no-op at run time -- this turns it into a red test.  Links
-   compilerlibs/ocamlcommon (for the table) against vreplay.cma (for
-   the catalogue); exits 1 listing any offender. *)
+(* Every name the instrumentation can emit as an event's [ds] must
+   resolve in [Data_structure.of_name] -- an unmatched name is a silent
+   runtime no-op; this makes it a red test.  Exits 1 listing offenders. *)
 
 let () =
   let names = Vreplay_instrumentation.catalogue_names in

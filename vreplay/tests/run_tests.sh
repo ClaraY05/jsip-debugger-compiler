@@ -84,10 +84,8 @@ $OCAMLC vreplay/src/vreplay.cma -o "$TMP/check_dump" \
 
 pass=0; failed=0
 
-# The catalogue round-trip check: every name the instrumentation can
-# emit as an event's ds must resolve in Data_structure.of_name --
-# otherwise it silently no-ops at run time.  Compiler side comes from
-# ocamlcommon, runtime side from vreplay.cma.
+# catalogue round-trip: every name the instrumentation (ocamlcommon)
+# can emit must resolve in Data_structure.of_name (vreplay.cma)
 if $OCAMLC -I typing -I compilerlibs compilerlibs/ocamlcommon.cma \
     vreplay/src/vreplay.cma -o "$TMP/check_catalogue" \
     vreplay/tests/check_catalogue.ml > "$TMP/catalogue.compile" 2>&1 \
