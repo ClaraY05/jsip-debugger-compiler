@@ -57,9 +57,9 @@ of it lives in directories the project owns.
 
 | Where | What |
 | --- | --- |
-| `typing/vreplay_instrumentation.{ml,mli}` | The heart: a `Tast_mapper` that classifies applications by provenance and splices frame markers, a result binding, and a `Vreplay.snapshot` call per observed root into the typed AST. |
-| `vreplay/src/` | The runtime library linked into instrumented programs (never into the compiler): the data-structure catalogue and layouts, the sexp wire schema (`sexp.mli` is the spec), the weak registry and `snapshot` entry point, and `snapshot.c` -- the C heap walker and dump sink. See [vreplay/src/README.md](vreplay/src/README.md) for how it works. |
-| `vreplay/tests/` | The golden-dump suite: 49 cases, their expected dumps (verbatim run output, reused by the interface repo as parser fixtures), Base/Core stub units (`core_stubs/`) so CI needs no opam switch, and `check_dump.ml`, a structural validator. |
+| `typing/vreplay_instrumentation.{ml,mli}` | The heart: a `Tast_mapper` that classifies applications by provenance and splices frame markers, a result binding, and a `Vreplay.snapshot` call per observed root into the typed AST. One inner module per concern (`Wire`, `Catalogue` -- one table, `declares`/`observes` per unit -- `Classify`, `Schema`, `Scope`, `Inject`) behind a two-value interface. |
+| `vreplay/src/` | The runtime library linked into instrumented programs (never into the compiler), five units plus two C files: the data-structure catalogue and layouts, the sexp wire schema (`sexp.mli` is the spec), layout flattening (`vreplay_layout`, the field-order contract with the walker), the weak registry (`vreplay_registry`), the `Vreplay` façade with the `snapshot` entry point, `snapshot.c` (the C heap walker) and `wire_sink.c` (the dump sink). See [vreplay/src/README.md](vreplay/src/README.md) for how it works. |
+| `vreplay/tests/` | The golden-dump suite: 49 cases, their expected dumps (verbatim run output, reused by the interface repo as parser fixtures), Base/Core stub units (`core_stubs/`) so CI needs no opam switch, `check_dump.ml` (structural validator), and `check_catalogue.ml` (every catalogue name the instrumentation can emit must resolve in the runtime library -- a typo is a red test, not a silent no-op). |
 
 **Modified upstream compiler files -- all small and surgical:**
 
