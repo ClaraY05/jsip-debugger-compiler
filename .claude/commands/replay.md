@@ -25,8 +25,8 @@ No `-I` or stdlib flags are needed. Use the `./ocamlc` in the repo root — **ne
 `_install/bin/ocamlc*`, which is committed junk with a dangling shebang.
 
 If the program dies at startup with `unknown C primitive caml_wire_emit`, the stubs DLL
-was not found: the primitives live in `vreplay/dllvreplaybyt-*.so` (built with the
-library), not in any runtime. Fix by linking with `-dllpath $PWD/vreplay` (in-tree) or
+was not found: the primitives live in `vreplay/src/dllvreplaybyt-*.so` (built with the
+library), not in any runtime. Fix by linking with `-dllpath $PWD/vreplay/src` (in-tree) or
 `make install` (the DLL lands in `stublibs/`, which `ld.conf` covers). A shebang failure
 (`required file not found`) is separate — fix with `-use-runtime runtime/ocamlrun`.
 

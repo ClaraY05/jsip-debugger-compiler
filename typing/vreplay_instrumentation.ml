@@ -1,3 +1,9 @@
+(* -visual-replay's typed-tree pass, one inner module per concern --
+   Wire (event fields + emit primitive), Catalogue (the unit tables),
+   Classify (which calls are events), Schema (ty + payload schemas),
+   Scope (binder identity), Inject (the AST rewrite).
+   [inject_instrumentation] at the bottom is the only export. *)
+
 (* the wire format: the record each event dumps, and the emit primitive
    every byte of the dump goes through *)
 module Wire = struct
@@ -69,7 +75,7 @@ module Wire = struct
   (* [external __wire_emit : string -> unit = "caml_wire_emit"], spliced
      per instrumented unit *)
   let emit_name = "__wire_emit"
-  let emit_c_name = "caml_wire_emit"  (* defined in runtime/snapshot.c *)
+  let emit_c_name = "caml_wire_emit"  (* defined in vreplay/src/snapshot.c *)
 
   let emit_decl =
     let ty id =
@@ -94,173 +100,119 @@ module Wire = struct
                ; pconst_loc = Location.none } ) ])
 end
 
-(* the result binding each instrumented call introduces *)
-let res_binder_name = "__vreplay_res"
-
-(* frame markers, summed into depth by the reader ({ +1, } -1); emitted
-   via [caml_wire_emit], never [Printf] (REVIEW_FINDINGS #2) *)
-let frame_open = "{"
-let frame_close = "}"
-
-(* ---- classification: which applications are events ---- *)
+(* ---- the catalogue tables: which units declare the tracked
+   representations, and which modules' calls observe them ---- *)
+module Catalogue = struct
 
 type mutability = Immutable | Mutable
+
+(* One row per compilation unit: [declares] is the catalogue entry of
+   the TYPE the unit declares (what names a root -- the module a call
+   went through says nothing about what it hands back); [observes] is
+   what its CALLS do -- mutability plus the ENTRIES operated on, so one
+   interface can serve several representations.  Base/Core rows list
+   both the implementation unit and its [_intf] (which one a type
+   resolves to is a fact about library assembly); qualified rows
+   ("Base__Map.Tree") come from [Classify.type_unit].  [list]/[array]
+   (predef, no unit) and [Base__Container_intf] (read-only ops) are
+   uncovered on purpose.  Every name a row can emit must resolve in
+   [Data_structure.of_name] -- vreplay/tests/check_catalogue.ml turns a
+   typo (a silent runtime no-op) into a red test. *)
+type entry =
+  { declares : string option
+  ; observes : (mutability * string list) option }
+
+let d name = { declares = Some name; observes = None }
+let o mut ops = { declares = None; observes = Some (mut, ops) }
+let d_o name mut ops =
+  { declares = Some name; observes = Some (mut, ops) }
+
+let table : (string * entry) list =
+  [ "Stdlib__Map", d_o "Map" Immutable [ "Map" ]
+  ; "Stdlib__Set", d_o "Set" Immutable [ "Set" ]
+  ; "Stdlib__Queue", d_o "Queue" Mutable [ "Queue" ]
+  ; "Stdlib__Hashtbl", d_o "Hashtbl" Mutable [ "Hashtbl" ]
+  ; "Stdlib__Stack", d_o "Stack" Mutable [ "Stack" ]
+  ; "Stdlib__Dynarray", d_o "Dynarray" Mutable [ "Dynarray" ]
+  ; "Base__Map", d_o "Core_map" Immutable [ "Core_map" ]
+  ; "Base__Map_intf", d_o "Core_map" Immutable [ "Core_map" ]
+  ; "Core__Map", d_o "Core_map" Immutable [ "Core_map" ]
+  ; "Core__Map_intf", d_o "Core_map" Immutable [ "Core_map" ]
+  ; "Base__Set", d_o "Core_set" Immutable [ "Core_set" ]
+  ; "Base__Set_intf", d_o "Core_set" Immutable [ "Core_set" ]
+  ; "Core__Set", d_o "Core_set" Immutable [ "Core_set" ]
+  ; "Core__Set_intf", d_o "Core_set" Immutable [ "Core_set" ]
+  ; "Base__Hashtbl", d_o "Core_hashtbl" Mutable [ "Core_hashtbl" ]
+  ; "Base__Hashtbl_intf", d_o "Core_hashtbl" Mutable [ "Core_hashtbl" ]
+  ; "Core__Hashtbl", d_o "Core_hashtbl" Mutable [ "Core_hashtbl" ]
+  ; "Core__Hashtbl_intf", d_o "Core_hashtbl" Mutable [ "Core_hashtbl" ]
+  ; "Base__Hash_set", d_o "Core_hash_set" Mutable [ "Core_hash_set" ]
+  ; "Base__Hash_set_intf", d_o "Core_hash_set" Mutable [ "Core_hash_set" ]
+  ; "Core__Hash_set", d_o "Core_hash_set" Mutable [ "Core_hash_set" ]
+  ; "Core__Hash_set_intf", d_o "Core_hash_set" Mutable [ "Core_hash_set" ]
+  (* two operates-on entries: [Linked_queue] values are stdlib queues *)
+  ; "Base__Queue", d_o "Core_queue" Mutable [ "Core_queue"; "Queue" ]
+  ; "Base__Queue_intf", d_o "Core_queue" Mutable [ "Core_queue"; "Queue" ]
+  ; "Core__Queue", d_o "Core_queue" Mutable [ "Core_queue"; "Queue" ]
+  ; "Core__Queue_intf", d_o "Core_queue" Mutable [ "Core_queue"; "Queue" ]
+  ; "Base__Stack", d_o "Core_stack" Mutable [ "Core_stack" ]
+  ; "Base__Stack_intf", d_o "Core_stack" Mutable [ "Core_stack" ]
+  ; "Core__Stack", d_o "Core_stack" Mutable [ "Core_stack" ]
+  ; "Core__Stack_intf", d_o "Core_stack" Mutable [ "Core_stack" ]
+  (* declares nothing: its values ARE stdlib queues *)
+  ; "Base__Linked_queue", o Mutable [ "Queue" ]
+  ; "Core__Linked_queue", o Mutable [ "Queue" ]
+  ; "Core__Deque", d_o "Core_deque" Mutable [ "Core_deque" ]
+  ; "Core__Deque_intf", d_o "Core_deque" Mutable [ "Core_deque" ]
+  ; "Core__Fdeque", d_o "Core_fdeque" Immutable [ "Core_fdeque" ]
+  ; "Core__Fdeque_intf", d_o "Core_fdeque" Immutable [ "Core_fdeque" ]
+  ; "Core__Fqueue", d_o "Core_fdeque" Immutable [ "Core_fdeque" ]
+  ; "Core__Doubly_linked",
+    d_o "Core_doubly_linked" Mutable [ "Core_doubly_linked" ]
+  ; "Core__Doubly_linked_intf",
+    d_o "Core_doubly_linked" Mutable [ "Core_doubly_linked" ]
+  ; "Core__Hash_queue", d_o "Core_hash_queue" Mutable [ "Core_hash_queue" ]
+  ; "Core__Hash_queue_intf",
+    d_o "Core_hash_queue" Mutable [ "Core_hash_queue" ]
+  (* a [Core.Bag.t] IS a doubly-linked list, sealed into Bag's units *)
+  ; "Core__Bag", d_o "Core_doubly_linked" Mutable [ "Core_doubly_linked" ]
+  ; "Core__Bag_intf",
+    d_o "Core_doubly_linked" Mutable [ "Core_doubly_linked" ]
+  ; "Core__Union_find", d_o "Core_union_find" Mutable [ "Core_union_find" ]
+  (* The bare trees: a [Map.Tree.t] has no comparator record, so it
+     must not walk as a map.  Declares-only -- Tree functions live in
+     the parents' own (immutable) units.  Qualified names not claimed
+     here ([Base__Map.Comparator], [.Elt]) match nothing. *)
+  ; "Base__Map.Tree", d "Core_map_tree"
+  ; "Base__Map_intf.Tree", d "Core_map_tree"
+  ; "Core__Map.Tree", d "Core_map_tree"
+  ; "Core__Map_intf.Tree", d "Core_map_tree"
+  ; "Base__Set.Tree", d "Core_set_tree"
+  ; "Base__Set_intf.Tree", d "Core_set_tree"
+  ; "Core__Set.Tree", d "Core_set_tree"
+  ; "Core__Set_intf.Tree", d "Core_set_tree" ]
+
+(* the two views the classifier reads, derived so they cannot drift *)
+let ds_of_type_unit : (string * string) list =
+  List.filter_map
+    (fun (u, e) ->
+       match e.declares with Some n -> Some (u, n) | None -> None)
+    table
+
+let ds_table : (string * (mutability * string list)) list =
+  List.filter_map
+    (fun (u, e) ->
+       match e.observes with Some ob -> Some (u, ob) | None -> None)
+    table
+
+end
+
+(* ---- classification: which applications are events ---- *)
+module Classify = struct
 
 (* where an event's traversal root lives: the result, or the mutated
    argument at that position of the argument list, read post-call *)
 type root = Result | Argument of int
-
-(* The unit a tracked structure's TYPE is declared in, and the catalogue
-   name of the REPRESENTATION that type has -- these names MUST mirror
-   [Data_structure.of_name] in vreplay/data_structure.ml.  This is what
-   names a root, because the module a call went through says nothing
-   about what the call hands back: [Core.Linked_queue] hands back a
-   [Stdlib.Queue.t], and [Queue.pop] on a queue of maps hands back a
-   map.  [Core.Map.t] is an alias of [Base.Map.t] and expands to it, but
-   a Core module whose type stopped being transparent would resolve to
-   its own unit, so both are listed.  [list]/[array] are predef-typed,
-   declared in no unit at all; they would need their own rule and are
-   not covered. *)
-let ds_of_type_unit : (string * string) list =
-  [ "Stdlib__Map", "Map"
-  ; "Stdlib__Set", "Set"
-  ; "Stdlib__Queue", "Queue"
-  ; "Stdlib__Hashtbl", "Hashtbl"
-  ; "Stdlib__Stack", "Stack"
-  ; "Stdlib__Dynarray", "Dynarray"
-  (* Base and Core: BOTH a module's implementation unit and the _intf
-     unit its module type came from, because which one a value's type
-     resolves to is a fact about how the library was assembled, not
-     about the call site -- [Base.Map.t] lands on [Base__Map],
-     [Base.Queue.t] on [Base__Queue_intf].  [Linked_queue] is
-     deliberately absent: its values are stdlib queues and must resolve
-     as such. *)
-  ; "Base__Map", "Core_map"
-  ; "Base__Map_intf", "Core_map"
-  ; "Core__Map", "Core_map"
-  ; "Core__Map_intf", "Core_map"
-  ; "Base__Set", "Core_set"
-  ; "Base__Set_intf", "Core_set"
-  ; "Core__Set", "Core_set"
-  ; "Core__Set_intf", "Core_set"
-  ; "Base__Hashtbl", "Core_hashtbl"
-  ; "Base__Hashtbl_intf", "Core_hashtbl"
-  ; "Core__Hashtbl", "Core_hashtbl"
-  ; "Core__Hashtbl_intf", "Core_hashtbl"
-  ; "Base__Hash_set", "Core_hash_set"
-  ; "Base__Hash_set_intf", "Core_hash_set"
-  ; "Core__Hash_set", "Core_hash_set"
-  ; "Core__Hash_set_intf", "Core_hash_set"
-  ; "Base__Queue", "Core_queue"
-  ; "Base__Queue_intf", "Core_queue"
-  ; "Core__Queue", "Core_queue"
-  ; "Core__Queue_intf", "Core_queue"
-  ; "Base__Stack", "Core_stack"
-  ; "Base__Stack_intf", "Core_stack"
-  ; "Core__Stack", "Core_stack"
-  ; "Core__Stack_intf", "Core_stack"
-  ; "Core__Deque", "Core_deque"
-  ; "Core__Deque_intf", "Core_deque"
-  ; "Core__Fdeque", "Core_fdeque"
-  ; "Core__Fdeque_intf", "Core_fdeque"
-  ; "Core__Fqueue", "Core_fdeque"
-  ; "Core__Doubly_linked", "Core_doubly_linked"
-  ; "Core__Doubly_linked_intf", "Core_doubly_linked"
-  ; "Core__Hash_queue", "Core_hash_queue"
-  ; "Core__Hash_queue_intf", "Core_hash_queue"
-  ; "Core__Union_find", "Core_union_find"
-  (* A [Core.Bag.t] IS a doubly-linked list: core's bag.ml includes
-     Doubly_linked behind an ascription, which keeps the representation
-     and seals the type, so a bag's own unit declares it and it needs
-     naming here as well as in [ds_table].  The real library seals it
-     into the _intf unit that carries the signature. *)
-  ; "Core__Bag", "Core_doubly_linked"
-  ; "Core__Bag_intf", "Core_doubly_linked"
-  (* An auxiliary type declared beside a container's own [t] shares its
-     unit, so it travels under that unit QUALIFIED by the submodule it
-     was reached through -- see [type_unit].  A [Map.Tree.t] is the
-     map's tree with no comparator record around it, and walking one as
-     a map would look for that record and find a node.  Qualified names
-     the catalogue does not claim ([Base__Map.Comparator],
-     [Core__Doubly_linked.Elt]) match nothing here and are left
-     alone. *)
-  ; "Base__Map.Tree", "Core_map_tree"
-  ; "Base__Map_intf.Tree", "Core_map_tree"
-  ; "Core__Map.Tree", "Core_map_tree"
-  ; "Core__Map_intf.Tree", "Core_map_tree"
-  ; "Base__Set.Tree", "Core_set_tree"
-  ; "Base__Set_intf.Tree", "Core_set_tree"
-  ; "Core__Set.Tree", "Core_set_tree"
-  ; "Core__Set_intf.Tree", "Core_set_tree" ]
-
-(* The modules whose calls are events: the unit a called function is
-   declared in -- for Base and Core usually the _intf unit its module
-   type came from, not the implementation -- the call's mutability, and
-   the catalogue entries the module OPERATES ON.
-
-   A mutable call re-observes its container arguments, but only those:
-   an argument of some other tracked kind is an element being handed
-   over, which the call cannot have mutated ([Queue.add m q] moves [m]
-   into [q], it does not change [m]).  Naming catalogue ENTRIES rather
-   than units is what lets one shared interface serve several
-   representations -- Base's Queue_intf backs both [Base.Queue], a ring
-   buffer, and [Linked_queue], a stdlib queue.
-
-   [Base__Container_intf] is deliberately absent: the operations every
-   container shares ([length], [iter], [fold]) only read, so nothing
-   they are handed can have changed. *)
-let ds_table : (string * (mutability * string list)) list =
-  [ "Stdlib__Map", (Immutable, [ "Map" ])
-  ; "Stdlib__Set", (Immutable, [ "Set" ])
-  ; "Stdlib__Queue", (Mutable, [ "Queue" ])
-  ; "Stdlib__Hashtbl", (Mutable, [ "Hashtbl" ])
-  ; "Stdlib__Stack", (Mutable, [ "Stack" ])
-  ; "Stdlib__Dynarray", (Mutable, [ "Dynarray" ])
-  ; "Base__Map", (Immutable, [ "Core_map" ])
-  ; "Base__Map_intf", (Immutable, [ "Core_map" ])
-  ; "Core__Map", (Immutable, [ "Core_map" ])
-  ; "Core__Map_intf", (Immutable, [ "Core_map" ])
-  ; "Base__Set", (Immutable, [ "Core_set" ])
-  ; "Base__Set_intf", (Immutable, [ "Core_set" ])
-  ; "Core__Set", (Immutable, [ "Core_set" ])
-  ; "Core__Set_intf", (Immutable, [ "Core_set" ])
-  ; "Base__Hashtbl", (Mutable, [ "Core_hashtbl" ])
-  ; "Base__Hashtbl_intf", (Mutable, [ "Core_hashtbl" ])
-  ; "Core__Hashtbl", (Mutable, [ "Core_hashtbl" ])
-  ; "Core__Hashtbl_intf", (Mutable, [ "Core_hashtbl" ])
-  ; "Base__Hash_set", (Mutable, [ "Core_hash_set" ])
-  ; "Base__Hash_set_intf", (Mutable, [ "Core_hash_set" ])
-  ; "Core__Hash_set", (Mutable, [ "Core_hash_set" ])
-  ; "Core__Hash_set_intf", (Mutable, [ "Core_hash_set" ])
-  ; "Base__Queue", (Mutable, [ "Core_queue"; "Queue" ])
-  ; "Base__Queue_intf", (Mutable, [ "Core_queue"; "Queue" ])
-  ; "Core__Queue", (Mutable, [ "Core_queue"; "Queue" ])
-  ; "Core__Queue_intf", (Mutable, [ "Core_queue"; "Queue" ])
-  ; "Base__Stack", (Mutable, [ "Core_stack" ])
-  ; "Base__Stack_intf", (Mutable, [ "Core_stack" ])
-  ; "Core__Stack", (Mutable, [ "Core_stack" ])
-  ; "Core__Stack_intf", (Mutable, [ "Core_stack" ])
-  ; "Base__Linked_queue", (Mutable, [ "Queue" ])
-  ; "Core__Linked_queue", (Mutable, [ "Queue" ])
-  ; "Core__Deque", (Mutable, [ "Core_deque" ])
-  ; "Core__Deque_intf", (Mutable, [ "Core_deque" ])
-  ; "Core__Fdeque", (Immutable, [ "Core_fdeque" ])
-  ; "Core__Fdeque_intf", (Immutable, [ "Core_fdeque" ])
-  ; "Core__Fqueue", (Immutable, [ "Core_fdeque" ])
-  ; "Core__Doubly_linked", (Mutable, [ "Core_doubly_linked" ])
-  ; "Core__Doubly_linked_intf", (Mutable, [ "Core_doubly_linked" ])
-  ; "Core__Hash_queue", (Mutable, [ "Core_hash_queue" ])
-  ; "Core__Hash_queue_intf", (Mutable, [ "Core_hash_queue" ])
-  (* [Core.Bag] IS a doubly-linked list -- it includes one wholesale, so
-     its values carry that type and walk with its layout.  Only the
-     functions are its own, which is all this table names. *)
-  ; "Core__Bag", (Mutable, [ "Core_doubly_linked" ])
-  ; "Core__Bag_intf", (Mutable, [ "Core_doubly_linked" ])
-  ; "Core__Union_find", (Mutable, [ "Core_union_find" ]) ]
-  (* [Map.Tree] and [Set.Tree] need no entry: their functions live in
-     the map's and set's own units, which are immutable, and an
-     immutable call observes its RESULT, whose own type decides how it
-     is walked. *)
 
 (* declaring unit of a uid. [Subst] copies uids verbatim, so [Item]
    survives [Map.Make], [include], [open] and aliasing.
@@ -305,7 +257,7 @@ let type_unit env ty =
     | decl ->
       let unit = uid_comp_unit decl.type_uid in
       begin match unit, aux with
-      | Some u, Some m when List.mem_assoc u ds_of_type_unit ->
+      | Some u, Some m when List.mem_assoc u Catalogue.ds_of_type_unit ->
         Some (u ^ "." ^ m)
       | (Some _ | None), _ -> unit
       end
@@ -339,7 +291,7 @@ let type_units (e : Typedtree.expression) =
    type. *)
 let structure_ds (e : Typedtree.expression) =
   List.find_map
-    (fun unit -> List.assoc_opt unit ds_of_type_unit)
+    (fun unit -> List.assoc_opt unit Catalogue.ds_of_type_unit)
     (type_units e)
 
 (* partial application: the call leaves an arrow *)
@@ -388,7 +340,7 @@ let classify (exp : Typedtree.expression)
     begin match uid_comp_unit vd.val_uid with
     | None -> []
     | Some comp_unit ->
-      begin match List.assoc_opt comp_unit ds_table with
+      begin match List.assoc_opt comp_unit Catalogue.ds_table with
       | None -> []
       | Some (mutability, operates) ->
         let result =
@@ -397,8 +349,8 @@ let classify (exp : Typedtree.expression)
           | None -> []
         in
         begin match mutability with
-        | Immutable -> result
-        | Mutable ->
+        | Catalogue.Immutable -> result
+        | Catalogue.Mutable ->
           if is_partial exp then []
           else argument_roots operates args @ result
         end
@@ -406,7 +358,11 @@ let classify (exp : Typedtree.expression)
     end
   | _ -> []
 
-(* ---- the static type each root carries ---- *)
+end
+
+(* ---- the [ty] and payload schemas each root carries, and the
+   user-declared-type test behind [ds_type User] ---- *)
+module Schema = struct
 
 (* [ty] printed as the user reads it at [env]: inside
    [wrap_printing_env] so paths shorten against the caller's scope
@@ -503,6 +459,8 @@ type schema_entry =
   ; fields : int list
   ; kind : int }
 
+(* keep in sync with vreplay/src/snapshot.c's [cschema] and the
+   encoding documented in vreplay/src/vreplay.mli *)
 let no_schema = -1
 let kind_fixed = 0
 let kind_array = 1
@@ -650,10 +608,10 @@ let is_user_declared_type env ty =
   | Types.Tconstr (path, _, _) ->
     begin match Env.find_type path env with
     | decl ->
-      begin match uid_comp_unit decl.type_uid with
+      begin match Classify.uid_comp_unit decl.type_uid with
       | Some unit ->
         not (is_stdlib_unit unit)
-        && not (List.mem_assoc unit ds_of_type_unit)
+        && not (List.mem_assoc unit Catalogue.ds_of_type_unit)
       | None -> false
       end
     | exception Not_found -> false
@@ -666,6 +624,18 @@ let is_user_declared_type env ty =
 let is_user_declared (e : Typedtree.expression) =
   is_user_declared_type e.exp_env e.exp_type
 
+end
+
+(* every name the table can emit as an event's [ds]; exported for
+   vreplay/tests/check_catalogue.ml *)
+let catalogue_names =
+  let of_row (_, (e : Catalogue.entry)) =
+    (match e.declares with Some n -> [ n ] | None -> [])
+    @ (match e.observes with Some (_, ops) -> ops | None -> [])
+  in
+  List.sort_uniq String.compare
+    (Schema.user_ds :: List.concat_map of_row Catalogue.table)
+
 (* ---- scope: which binding a name means where an event fires ----
 
    The registry says what a structure is CALLED; that alone cannot tell
@@ -675,6 +645,7 @@ let is_user_declared (e : Typedtree.expression) =
    to at that program point.  A reader compares the two: they agree
    while the structure still answers to its name, and part company once
    a later [let] takes the name over or its scope is left behind. *)
+module Scope = struct
 
 (* A binding's identity: the unit that bound it, then the identifier
    with the stamp separating it from every other binding of that name --
@@ -706,9 +677,9 @@ let binder_at env ~file name =
    "out of scope" for a structure the program can still reach. *)
 let is_trackable env ty =
   List.exists
-    (fun unit -> List.mem_assoc unit ds_of_type_unit)
-    (type_units_of env ty)
-  || is_user_declared_type env ty
+    (fun unit -> List.mem_assoc unit Catalogue.ds_of_type_unit)
+    (Classify.type_units_of env ty)
+  || Schema.is_user_declared_type env ty
 
 (* the pass's own bindings, which are in scope at an injection point but
    are not the program's ([__vreplay_res], [__wire_emit]) *)
@@ -735,7 +706,19 @@ let scope_at env ~file =
        | _ -> acc)
     None env []
 
-(* ---- the injected observation ---- *)
+end
+
+(* ---- the injected observation and the typed-AST rewrite ---- *)
+module Inject = struct
+
+(* the result binding each instrumented call introduces *)
+let res_binder_name = "__vreplay_res"
+
+(* frame markers, summed into depth by the reader ({ +1, } -1); emitted
+   via [caml_wire_emit], never [Printf] -- the channel buffer would hold
+   them until exit and reorder them after every payload *)
+let frame_open = "{"
+let frame_close = "}"
 
 (* Build and type [Vreplay.snapshot ~loc ~fn ~ds ~args ~name ~binder
    ~scope ~ty <root>] in [env].  [root] is always a plain identifier --
@@ -774,7 +757,7 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~binder ~ty ~schema ~root =
   in
   let arg_triple (k, l, v) = tuple [ str k; str l; str v ] in
   let ty_pair (role, t) = tuple [ str role; str t ] in
-  let schema_entry e =
+  let schema_entry (e : Schema.schema_entry) =
     tuple [ list_of str e.labels; list_of int e.fields; int e.kind ]
   in
   let schema_role (role, i) = tuple [ str role; int i ] in
@@ -797,11 +780,11 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~binder ~ty ~schema ~root =
      the override is the identity. *)
   let binder =
     match binder with
-    | Some id -> binder_of_ident ~file id
-    | None -> binder_at env ~file name
+    | Some id -> Scope.binder_of_ident ~file id
+    | None -> Scope.binder_at env ~file name
   in
   let scope =
-    let visible = scope_at env ~file in
+    let visible = Scope.scope_at env ~file in
     if String.equal name "" || String.equal binder "" then visible
     else (name, binder) :: List.remove_assoc name visible
   in
@@ -832,8 +815,8 @@ let snapshot_call env ~loc ~fn ~ds ~args ~name ~binder ~ty ~schema ~root =
 (* the identifier the post-call hook reads: the bound result, or the
    mutated argument (an ident, per [argument_roots]) *)
 let root_lid args = function
-  | Result -> Longident.Lident res_binder_name
-  | Argument i ->
+  | Classify.Result -> Longident.Lident res_binder_name
+  | Classify.Argument i ->
     begin match List.nth args i with
     | (_, Typedtree.Arg
            { Typedtree.exp_desc = Texp_ident (_, lid, _); _ }) -> lid.txt
@@ -843,8 +826,8 @@ let root_lid args = function
 (* the typed expression a root's static type is read off: the whole
    application for a Result, the argument at that position otherwise *)
 let root_expression (exp : Typedtree.expression) args = function
-  | Result -> exp
-  | Argument i ->
+  | Classify.Result -> exp
+  | Classify.Argument i ->
     begin match List.nth args i with
     | (_, Typedtree.Arg a) -> a
     | _ -> assert false (* [argument_roots] only returns [Arg] positions *)
@@ -972,9 +955,9 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
        variant, an abstract one) would dump an unlabelled block, which
        is no better than the numbering this replaces. *)
     match binder with
-    | Some (name, id, bound) when is_user_declared bound ->
-      let ((_ : schema_entry list), roles) as schema =
-        root_schema ~ds:user_ds bound
+    | Some (name, id, bound) when Schema.is_user_declared bound ->
+      let ((_ : Schema.schema_entry list), roles) as schema =
+        Schema.root_schema ~ds:Schema.user_ds bound
       in
       begin match roles with
       | [] -> vb
@@ -983,11 +966,11 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
            rewritten by now, and printing that would put this pass's own
            injected code on the wire as the event's source text *)
         let wire = Wire.format_binding bound in
-        let ty = root_ty ~ds:user_ds bound in
+        let ty = Schema.root_ty ~ds:Schema.user_ds bound in
         let hooks =
           [ (fun env ->
                snapshot_call env ~loc:wire.Wire.location
-                 ~fn:wire.Wire.function_info ~ds:user_ds
+                 ~fn:wire.Wire.function_info ~ds:Schema.user_ds
                  ~args:wire.Wire.argument_list ~name ~binder:(Some id) ~ty
                  ~schema ~root:(Longident.Lident res_binder_name)) ]
         in
@@ -1004,7 +987,7 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
     let recurse_down : Typedtree.expression = super.expr self exp in
     match exp.exp_desc with
     | Texp_apply (func, args) ->
-      begin match classify exp func args with
+      begin match Classify.classify exp func args with
       | [] -> recurse_down
       | roots ->
         let wire = Wire.format_function_call exp func args in
@@ -1022,19 +1005,19 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
                   which binding that is *)
                let name, binder =
                  match root with
-                 | Result ->
+                 | Classify.Result ->
                    begin match result_binding with
                    | Some (name, id) -> (name, Some id)
                    | None -> ("", None)
                    end
-                 | Argument _ ->
+                 | Classify.Argument _ ->
                    ( Format.asprintf "%a" Pprintast.longident
                        (root_lid args root)
                    , None )
                in
                let root_exp = root_expression exp args root in
-               let ty = root_ty ~ds root_exp in
-               let schema = root_schema ~ds root_exp in
+               let ty = Schema.root_ty ~ds root_exp in
+               let schema = Schema.root_schema ~ds root_exp in
                let root = root_lid args root in
                fun env ->
                  snapshot_call env ~loc:wire.Wire.location
@@ -1052,6 +1035,8 @@ let inject_mapper (emit_prim : Typedtree.value_description) =
     Tast_mapper.expr = inject_expression
   ; value_binding = inject_value_binding }
 
+end
+
 (* exposed for compile_common *)
 let inject_instrumentation ~inject (tast : Typedtree.implementation) =
   if not inject then tast
@@ -1067,7 +1052,7 @@ let inject_instrumentation ~inject (tast : Typedtree.implementation) =
     let emit_prim, _env =
       Typedecl.transl_value_decl decl_env Location.none Wire.emit_decl
     in
-    let mapper = inject_mapper emit_prim in
+    let mapper = Inject.inject_mapper emit_prim in
     let structure = mapper.Tast_mapper.structure mapper structure in
     let emit_item : Typedtree.structure_item =
       { str_desc = Typedtree.Tstr_primitive emit_prim

@@ -19,12 +19,17 @@ The project's files, in full:
 - `typing/vreplay_instrumentation.ml` / `.mli` — the `Tast_mapper` that rewrites
   `Texp_apply`. This is the heart of the project.
 - `driver/compile_common.ml:117` — the one-line hookpoint.
-- `vreplay/snapshot.c` — defines `caml_wire_emit`/`caml_wire_traverse`, built into the
+- `vreplay/src/snapshot.c` — defines `caml_wire_emit`/`caml_wire_traverse`, built into the
   library's C-stubs archives (not the runtime).
 - `utils/clflags.ml` / `.mli`, `driver/main_args.ml` / `.mli` — `-visual-replay` wiring.
 - `Makefile` (3 hunks), root `dune`, `parsing/dune` — build wiring.
-- `vreplay/` — empty stubs, not built.
-- `test_programs/`, `README_vreplay.md`, `README_C_Contributions.md`
+- `vreplay/src/` — the runtime library linked into instrumented programs
+  (`data_structure`, `sexp`, `vreplay_layout`, `vreplay_registry`, the
+  `vreplay` façade, plus `snapshot.c`/`wire_sink.c` C stubs); built by
+  `make vreplay` into `vreplay/src/vreplay.cma`.
+- `vreplay/tests/` — the golden-dump suite (cases, Core stubs, `check_dump.ml`,
+  `run_tests.sh`).
+- `test_programs/`
 
 Everything else you encounter is upstream OCaml.
 
@@ -69,7 +74,8 @@ git diff --stat 511483454 HEAD -- . ':!_install' ':!.depend' ':!Changes'
 - **Adding a compiler flag**: trace an existing one through `utils/clflags.ml` →
   `driver/main_args.ml` (note it appears in ~5 separate module lists) →
   the driver that consumes it.
-- **C runtime work**: `README_C_Contributions.md` in the repo root is a genuinely good
+- **C runtime work**: `README_C_Contributions.md` (deleted from the working
+  tree; read it from git history, e.g. `git show 3a8a253c40:README_C_Contributions.md`) is a genuinely good
   450-line guide — cite it rather than re-deriving the `CAMLparam`/`CAMLreturn` rules.
   `runtime/sys.c` is the canonical simple example to imitate.
 - **Build**: `make` is live, dune is **not** (`_build/` is stale and cannot produce
