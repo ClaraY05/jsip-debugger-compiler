@@ -74,6 +74,13 @@ val from_sexp : Sexp.t -> t
    entry can rename between events as the program passes the value
    around.
 
+   [binder] and [scope] say which BINDING that name is, and what the
+   unit's tracked names mean at this program point -- see
+   [Sexp.sexp_of_scope].  The name alone cannot tell [let m = M.add "a" 1
+   m]'s two versions apart, since both stay alive and both are called
+   [m]; the binder can, so a reader knows which one the program can still
+   reach.  [binder] is "" for a root observed under no name.
+
    [ty] is the root's static type as the instrumentation printed it off
    the typedtree -- the full type plus the role-labelled parameters a
    reader displays without parsing OCaml syntax; see [Sexp.sexp_of_ty].
@@ -88,6 +95,7 @@ val from_sexp : Sexp.t -> t
 val snapshot :
   loc:string * int * int * int -> fn:string * string -> ds:string
   -> args:(string * string * string) list -> name:string
+  -> binder:string -> scope:(string * string) list
   -> ty:string * (string * string) list
   -> schema:(string list * int list * int) list * (string * int) list
   -> 'a -> unit

@@ -382,7 +382,8 @@ interface work, not that it is broken.
 Every event is one line:
 
 ```
-(event (id N) (loc ...) (fn ...) (args ...) (registry ...) (ty ...) (snapshot ...))
+(event (id N) (loc ...) (fn ...) (args ...) (registry ...) (ty ...)
+       (binder ...) (scope ...) (snapshot ...))
 ```
 
 - `loc` / `fn` / `args` are rendered in the shapes `[@@deriving sexp]` gives
@@ -398,6 +399,17 @@ Every event is one line:
 - `ty` carries the root's static type as printed off the typedtree, plus
   role-labeled parameters (`key`/`data` for maps and hashtables, `elt` for
   sets and queues), so the interface displays types without parsing OCaml.
+- `binder` and `scope` say which *binding* the root's name is, and what each
+  of the unit's tracked names means at that program point —
+  `(binder Map_basic.m_88)`, `(scope ((m Map_basic.m_88)))`. The name alone
+  cannot separate `let m = M.add "a" 1 m`'s two versions: both stay alive
+  and both are called `m`, so the registry shows two `m` entries and only
+  the binder says which one the program can still reach (the interface greys
+  the others out). A binder is `unit.ident_stamp`, opaque — readers compare
+  it, nothing resolves it. It is omitted for a root observed under no name,
+  the way an anonymous registry entry omits its name; `scope` is always
+  written, so an event *without* it is an older dump rather than an empty
+  scope.
 - `snapshot` is `Vreplay.to_sexp` of `{ ds_type; root_node }`.
 
 Two properties that are easy to get wrong:

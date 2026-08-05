@@ -407,20 +407,29 @@ let absorb_members ~root ~paths ~first_id =
   end
 
 (* One event, one line: call metadata, the live registry, the root's
-   static type, then the [to_sexp] payload.  The {} depth markers around
-   the line belong to the instrumentation, the terminating newline to
-   us. *)
-let emit_event ~loc ~fn ~args ~id ~registry ~ty snap =
+   static type and binding, the scope that binding sits in, then the
+   [to_sexp] payload.  The {} depth markers around the line belong to the
+   instrumentation, the terminating newline to us. *)
+let emit_event ~loc ~fn ~args ~id ~registry ~binder ~scope ~ty snap =
+  (* a root observed under no name has no binding to state, and says so
+     by leaving the field out -- as an anonymous registry entry leaves
+     out its name *)
+  let binder_field =
+    if String.equal binder "" then []
+    else [ Sexp.List [ Sexp.Atom "binder"; Sexp.Atom binder ] ]
+  in
   let line =
     Sexp.List
-      [ Sexp.Atom "event"
-      ; Sexp.List [ Sexp.Atom "id"; Sexp.Atom (string_of_int id) ]
-      ; Sexp.List [ Sexp.Atom "loc"; Sexp.sexp_of_loc loc ]
-      ; Sexp.List [ Sexp.Atom "fn"; Sexp.sexp_of_fn fn ]
-      ; Sexp.List [ Sexp.Atom "args"; Sexp.sexp_of_args args ]
-      ; Sexp.List [ Sexp.Atom "registry"; Sexp.sexp_of_registry registry ]
-      ; Sexp.List [ Sexp.Atom "ty"; Sexp.sexp_of_ty ty ]
-      ; Sexp.List [ Sexp.Atom "snapshot"; to_sexp snap ] ]
+      ([ Sexp.Atom "event"
+       ; Sexp.List [ Sexp.Atom "id"; Sexp.Atom (string_of_int id) ]
+       ; Sexp.List [ Sexp.Atom "loc"; Sexp.sexp_of_loc loc ]
+       ; Sexp.List [ Sexp.Atom "fn"; Sexp.sexp_of_fn fn ]
+       ; Sexp.List [ Sexp.Atom "args"; Sexp.sexp_of_args args ]
+       ; Sexp.List [ Sexp.Atom "registry"; Sexp.sexp_of_registry registry ]
+       ; Sexp.List [ Sexp.Atom "ty"; Sexp.sexp_of_ty ty ] ]
+       @ binder_field
+       @ [ Sexp.List [ Sexp.Atom "scope"; Sexp.sexp_of_scope scope ]
+         ; Sexp.List [ Sexp.Atom "snapshot"; to_sexp snap ] ])
   in
   emit (Sexp.to_string_line line)
 
@@ -451,7 +460,7 @@ let layers_for ds_ty =
     layers
 
 (* ---- entry point injected at every event ---- *)
-let snapshot ~loc ~fn ~ds ~args ~name ~ty ~schema root =
+let snapshot ~loc ~fn ~ds ~args ~name ~binder ~scope ~ty ~schema root =
   match Data_structure.of_name ds with
   | None -> ()                              (* not a tracked data structure *)
   | Some ds_ty ->
@@ -493,6 +502,6 @@ let snapshot ~loc ~fn ~ds ~args ~name ~ty ~schema root =
          cells' ids are never remembered *)
       if immutable && fresh then
         absorb_members ~root:r ~paths ~first_id:next_id;
-      emit_event ~loc ~fn ~args ~id:root_id ~registry ~ty
+      emit_event ~loc ~fn ~args ~id:root_id ~registry ~binder ~scope ~ty
         { ds_type = ds_ty; root_node }
     end

@@ -235,6 +235,17 @@ let sexp_of_registry reg =
   in
   List (Array.to_list reg |> List.map entry)
 
+(* Event-level: what every tracked name means where the event fired, as
+   (name, binder) pairs in first-seen order -- the companion to the
+   registry's names.  The registry says a structure is called [m]; this
+   says which [m] that is, so a reader can tell a live binding from the
+   two shadowed versions still sitting in the registry beside it.  Empty
+   until the unit's first named observation, which is a fact and not an
+   absence: an event with no scope FIELD at all is the older wire. *)
+let sexp_of_scope scope =
+  let entry (name, binder) = List [ Atom name; Atom binder ] in
+  List (List.map entry scope)
+
 (* Event-level: the static type of the walked root, computed by the
    instrumentation off the typedtree -- its printed form plus the
    role-labelled parameters a reader shows without parsing OCaml type
