@@ -1,5 +1,11 @@
 # jsip-debugger-compiler -- OCaml with `-visual-replay`
 
+> [!NOTE]
+> This page documents the **fork**.  The OCaml compiler's own README is
+> [`README.adoc`](../README.adoc) at the repository root -- build
+> prerequisites, installation, licensing and everything else about the
+> compiler itself live there, unchanged from upstream.
+
 A fork of the OCaml compiler (5.5 line, upstream base `466e585663`)
 carrying **one feature**: a `-visual-replay` flag that instruments an
 OCaml program at the Typedtree layer so that, when run, it dumps one
@@ -19,9 +25,6 @@ is a `bonsai_term` TUI that steps through the dump GDB-style, showing
 the call stack, the source, and the heap shapes.  Goal: visualize data
 structures as the user steps through a replay of their program,
 without needing to know assembly.
-
-Upstream's own README is [README.adoc](../README.adoc).  Everything below
-is about the fork.
 
 ## Using it
 
