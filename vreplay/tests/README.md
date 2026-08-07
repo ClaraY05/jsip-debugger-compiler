@@ -35,14 +35,16 @@ ways:
 
 1. **`check_dump`** validates the dump's structure: every line is a
    `{`/`}` marker run plus at most one sexp, every event has the
-   wrapper fields in order (`id loc fn args registry ty binder scope
-   snapshot`; `binder` is omitted for a root observed under no name),
-   every snapshot round-trips exactly through
+   wrapper fields in order (`id loc fn args registry_delta ty binder
+   scope snapshot`; `binder` is omitted for a root observed under no
+   name), every snapshot round-trips exactly through
    `Vreplay.from_sexp`/`to_sexp`, depth returns to 0 at EOF, and the
    sharing invariants hold: node ids never repeat (except as an
    event's root -- for an immutable DS only as a revisit stub), every
-   `(Id n)` resolves to an already-defined node, registry ids are
-   dumped node ids, and addresses are unique within an event.
+   `(Id n)` resolves to an already-defined node, and addresses are
+   unique within an event.  The registry deltas are folded as they
+   would be by a reader: every upserted id is a dumped node, every
+   dropped id was live, and no id is upserted and dropped at once.
 2. **Golden diff** against `expected/<name>.dump`.  The expected files
    are **verbatim dumps of a real run** -- byte-for-byte what the
    interface's reader will be fed, usable directly as parser fixtures.
@@ -177,7 +179,7 @@ reading; regenerated 2026-08-05):
    (args ((No_label (expression (Unnamed "\"a\"")))
           (No_label (expression (Unnamed 1)))
           (No_label (expression (Unnamed m)))))
-   (registry ((1 0x77f8bffeeb68 m)))
+   (registry_delta ((upserts ((1 0x77f8bffeeb68 m))) (drops ())))
    (ty ((printed "int M.t") (params ((key string) (data int)))))
    (binder T.m_478) (scope ((m T.m_478)))
    (snapshot ((ds_type Map) (root_node ((id 1)
@@ -185,7 +187,7 @@ reading; regenerated 2026-08-05):
      (block ((l (Int 0)) (v (String a)) (d (Int 1)) (r (Int 0))))
      (children ()))))))
 }{(event (id 2) ...
-   (registry ((1 0x77f8bffeeb68 m) (2 0x77f8bffea750 m)))
+   (registry_delta ((upserts ((2 0x77f8bffea750 m))) (drops ())))
    (binder T.m_617) (scope ((m T.m_617)))
    (snapshot ((ds_type Map) (root_node ((id 2) ...
      (block ((l (Int 0)) (v (String a)) (d (Int 1)) (r Child)))
@@ -206,11 +208,15 @@ Field guide (`vreplay/src/sexp.mli` is the full spec):
   interface repo's own type shapes so its reader is derived, not
   hand-written.  An argument the application was abstracted over
   renders as `OMITTED`.
-- `registry` -- every tracked-and-alive structure as `(id address)` or
-  `(id address name)`; grows as structures are tracked, drops
-  GC-collected entries.  The name is the latest non-empty identifier
-  the structure was observed under, so an entry can rename between
-  events.  Addresses come from the same C walk as the nodes.
+- `registry_delta` -- the live registry as a change against the
+  previous event: `upserts` lists entries -- `(id address)` or
+  `(id address name)` -- that are new or whose address or name changed,
+  `drops` the ids the GC collected.  Folding the deltas reproduces the
+  full registry at every event; the first event's delta is the whole
+  registry.  The name is the latest non-empty identifier the structure
+  was observed under, so an upsert can rename an entry.  Addresses come
+  from the same C walk as the nodes (an entry is re-upserted when the
+  GC moved its block).
 - `ty` -- the root's static type as printed off the typedtree, plus
   role-labelled parameters (`key`/`data`, `elt`) a reader displays
   without parsing OCaml.

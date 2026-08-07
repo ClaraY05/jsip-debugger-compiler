@@ -110,17 +110,40 @@ val to_sexp : snapshot -> t
 val from_sexp : t -> snapshot
 
 (* The live weak registry at event time as (id, current address, name)
-   triples -- the event wrapper carries it beside the snapshot, and it is
-   the single source of CURRENT memory locations for tracked structures
-   (any [Id i] also resolves against the node that carried [(id i)]
-   earlier in the dump).  Ids
+   triples -- the single source of CURRENT memory locations for tracked
+   structures (any [Id i] also resolves against the node that carried
+   [(id i)] earlier in the dump).  Ids
    are stable across events; addresses are captured by the same C walk as
    the nodes.  The name is the latest non-empty identifier the structure
    was observed under (a later event may rename it); a named entry
    renders as [(1 0x7f2ce89e q)], an anonymous one ([""]) keeps the
    two-atom [(1 0x7f2ce89e)] shape.  Entries appear when a structure is
-   first tracked and disappear once the GC has collected it. *)
+   first tracked and disappear once the GC has collected it.
+
+   The event wrapper does NOT carry this list whole: re-stating every
+   live triple on every event was measured at 90% of a real dump's bytes
+   and most of the instrumented program's slowdown, for a list that
+   changes by well under one entry per event (addresses only move when
+   the GC moves the block, and tracked roots settle into the major
+   heap).  The wrapper carries [sexp_of_registry_delta] instead; this
+   renderer remains the entry shape the delta's [upserts] reuse. *)
 val sexp_of_registry : (int * nativeint * string) array -> t
+
+(* The registry as a delta against the previous event's:
+
+     (registry_delta ((upserts ((3 0x7f2ce89e q) (9 0x7f2cf120)))
+                      (drops (4 7))))
+
+   [upserts] holds the entries that are new since the previous event or
+   whose address or name changed, in registry (insertion) order, each in
+   [sexp_of_registry]'s entry shape; [drops] the ids whose structure the
+   GC collected, ascending.  A reader folds upserts then drops into its
+   running registry -- ids never recycle, so the order of the two parts
+   is immaterial -- and the fold after event N equals event N's full
+   registry exactly.  The first event's delta is the whole registry; an
+   event where nothing changed renders ((upserts ()) (drops ())). *)
+val sexp_of_registry_delta :
+  upserts:(int * nativeint * string) array -> drops:int list -> t
 
 (* What the source's names MEAN where an event fired, beside the registry
    saying what its structures are CALLED:

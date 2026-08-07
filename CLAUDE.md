@@ -270,12 +270,13 @@ result). Real output, abridged and wrapped for reading:
    (args ((No_label (expression (Unnamed "\"a\"")))
           (No_label (expression (Unnamed 1)))
           (No_label (expression (Unnamed m)))))
-   (registry ((1 0x7c4dc23f2360 m)))
+   (registry_delta ((upserts ((1 0x7c4dc23f2360 m))) (drops ())))
    (ty ((printed "int M.t") (params ((key string) (data int)))))
    (snapshot ((ds_type Map) (root_node ((id 1) (virtual_address 0x7c4d...)
      (block ((l (Int 0)) (v (String a)) (d (Int 1)) (r (Int 0))))
      (children ()))))))
-}{(event (id 2) ... (registry ((1 0x7c4dc23f2360 m) (2 0x7c4dc23ee788 m)))
+}{(event (id 2) ...
+   (registry_delta ((upserts ((2 0x7c4dc23ee788 m))) (drops ())))
    (snapshot ((ds_type Map) (root_node ((id 2) ...
      (block ((l (Int 0)) (v (String a)) (d (Int 1)) (r Child)))
      (children (((id 3) ... (block ((l (Int 0)) (v (String b))
@@ -391,7 +392,7 @@ interface work, not that it is broken.
 Every event is one line:
 
 ```
-(event (id N) (loc ...) (fn ...) (args ...) (registry ...) (ty ...)
+(event (id N) (loc ...) (fn ...) (args ...) (registry_delta ...) (ty ...)
        (binder ...) (scope ...) (snapshot ...))
 ```
 
@@ -399,12 +400,18 @@ Every event is one line:
   the **interface repo's own types** (`Location.t`, `Function_info.t`,
   `Argument.t` in `~/jsip-debugger-interface/lib/types`), so its reader is
   derived, not hand-written — see `Sexp.sexp_of_loc/fn/args`.
-- `registry` is the live weak registry: `(id address)` or `(id address name)`
-  per tracked-and-alive structure, captured by the same C walk as the nodes.
+- `registry_delta` is the live weak registry as a change against the
+  previous event — `((upserts (...)) (drops (...)))`, where upserts are
+  `(id address)` or `(id address name)` entries that are new or whose
+  address or name changed, and drops are ids the GC collected. Folding the
+  deltas reproduces the full registry at each event (the first event's
+  delta is all of it); addresses are captured by the same C walk as the
+  nodes, so an entry is re-upserted exactly when the GC moved its block.
   The name is the latest non-empty identifier the structure was observed
   under (a `let` binder or a mutated container argument); anonymous entries
-  keep the two-atom shape. Entries appear when a structure is first tracked
-  and vanish once the GC collects it.
+  keep the two-atom shape. The full-echo `registry` field this replaced
+  (2026-08-07) was 90% of a real dump's bytes and most of the instrumented
+  program's slowdown.
 - `ty` carries the root's static type as printed off the typedtree, plus
   role-labeled parameters (`key`/`data` for maps and hashtables, `elt` for
   sets and queues), so the interface displays types without parsing OCaml.
