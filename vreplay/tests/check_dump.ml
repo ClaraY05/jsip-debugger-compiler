@@ -9,8 +9,11 @@
    for an immutable DS only as a revisit stub (empty block/children);
    every (Id n) resolves to a node defined at or before its event;
    registry ids are dumped node ids; addresses are unique within an
-   event.  Usage: check_dump <dump-file>.  Exits 1 on the first
-   violation. *)
+   event.  The registry arrives as a delta ([upserts]/[drops] against
+   the previous event); the checker folds it and validates against the
+   folded state: an upserted id is a dumped node, a dropped id was live,
+   and no id is both in one event.  Usage: check_dump <dump-file>.
+   Exits 1 on the first violation. *)
 
 let fail line msg =
   Printf.eprintf "check_dump: line %d: %s\n" line msg;
@@ -18,6 +21,9 @@ let fail line msg =
 
 (* node ids defined by all events so far *)
 let defined : (int, unit) Hashtbl.t = Hashtbl.create 256
+
+(* the registry as folded from the deltas so far: the live ids *)
+let folded : (int, unit) Hashtbl.t = Hashtbl.create 64
 
 let check_snapshot lineno (s : Vreplay.t) =
   let rec collect (n : Vreplay.node) acc =
@@ -97,7 +103,12 @@ let () =
                    [ Sexp.Atom "fn"
                    ; Sexp.List [ Sexp.Atom _; Sexp.Atom _ ] ]
               :: Sexp.List [ Sexp.Atom "args"; Sexp.List args ]
-              :: Sexp.List [ Sexp.Atom "registry"; Sexp.List reg ]
+              :: Sexp.List
+                   [ Sexp.Atom "registry_delta"
+                   ; Sexp.List
+                       [ Sexp.List [ Sexp.Atom "upserts"; Sexp.List reg ]
+                       ; Sexp.List [ Sexp.Atom "drops"; Sexp.List drops ]
+                       ] ]
               :: Sexp.List [ Sexp.Atom "ty"; Sexp.List ty ]
               :: tail) ->
            (* the tail is [binder]-then-[scope]-then-[snapshot], with the
@@ -141,7 +152,7 @@ let () =
                    (Sexp.Atom _ :: Sexp.Atom a :: ([] | [ Sexp.Atom _ ]))
                  when String.length a > 2 && a.[0] = '0' && a.[1] = 'x' ->
                  ()
-               | _ -> fail !lineno "malformed registry entry")
+               | _ -> fail !lineno "malformed registry upsert")
              reg;
            (match ty with
             | [ Sexp.List [ Sexp.Atom "printed"; Sexp.Atom _ ]
@@ -159,19 +170,39 @@ let () =
            if Sexp.to_string (Vreplay.to_sexp s) <> Sexp.to_string snap
            then fail !lineno "snapshot does not round-trip";
            check_snapshot !lineno s;
-           (* every live registry root was dumped at its own first
-              event (this event's root included, just above) *)
+           (* fold the delta: every upserted root was dumped at its own
+              first event (this event's root included, just above); a
+              dropped id names a live entry and never one this event
+              also upserts *)
+           let upserted = Hashtbl.create 16 in
            List.iter
              (function
                | Sexp.List (Sexp.Atom i :: _) ->
                  (match int_of_string_opt i with
-                  | Some i when Hashtbl.mem defined i -> ()
+                  | Some i when Hashtbl.mem defined i ->
+                    Hashtbl.replace upserted i ();
+                    Hashtbl.replace folded i ()
                   | Some i ->
                     fail !lineno
                       (Printf.sprintf "registry id %d has no dumped node" i)
                   | None -> fail !lineno "malformed registry id")
-               | _ -> fail !lineno "malformed registry entry")
+               | _ -> fail !lineno "malformed registry upsert")
              reg;
+           List.iter
+             (function
+               | Sexp.Atom i ->
+                 (match int_of_string_opt i with
+                  | Some i when Hashtbl.mem upserted i ->
+                    fail !lineno
+                      (Printf.sprintf "id %d upserted and dropped at once" i)
+                  | Some i when Hashtbl.mem folded i ->
+                    Hashtbl.remove folded i
+                  | Some i ->
+                    fail !lineno
+                      (Printf.sprintf "dropped id %d was not live" i)
+                  | None -> fail !lineno "malformed drop id")
+               | _ -> fail !lineno "malformed drop id")
+             drops;
            incr events
          | _ -> fail !lineno "not an event record"
        end

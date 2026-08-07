@@ -235,6 +235,17 @@ let sexp_of_registry reg =
   in
   List (Array.to_list reg |> List.map entry)
 
+(* Event-level: the registry as a delta against the previous event's --
+   what the wrapper actually carries (see sexp.mli for why).  Upserts
+   reuse [sexp_of_registry]'s entry shape; drops are bare id atoms,
+   ascending. *)
+let sexp_of_registry_delta ~upserts ~drops =
+  List
+    [ List [ Atom "upserts"; sexp_of_registry upserts ]
+    ; List
+        [ Atom "drops"
+        ; List (List.map (fun id -> Atom (string_of_int id)) drops) ] ]
+
 (* Event-level: what every tracked name means where the event fired, as
    (name, binder) pairs in first-seen order -- the companion to the
    registry's names.  The registry says a structure is called [m]; this

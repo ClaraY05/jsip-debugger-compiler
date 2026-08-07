@@ -53,6 +53,49 @@ external traverse :
    and markers stay ordered (vreplay/src/wire_sink.c) *)
 external emit : string -> unit = "caml_wire_emit"
 
+(* Shadow of the registry as the previous event stated it, id ->
+   (address, name), so each event serializes only what changed.  The
+   full echo was 90% of a real dump's bytes and most of the slowdown an
+   instrumented program pays, re-stating entries that change less than
+   once per event: an address only moves when the GC moves the block,
+   and tracked roots settle into the major heap (a whole exchange run
+   measured 0.8 upserts per event across a thousand live entries).  The
+   compare runs on the triples the walker captured during its
+   no-allocation walk, so an upsert's address is the walk-time address,
+   exactly as the full echo's was. *)
+let shadow : (int, nativeint * string) Hashtbl.t = Hashtbl.create 64
+
+let registry_delta registry =
+  let upserts = ref [] in
+  Array.iter
+    (fun ((id, addr, name) as trip) ->
+      match Hashtbl.find_opt shadow id with
+      | Some (a, n) when a = addr && String.equal n name -> ()
+      | _ ->
+        Hashtbl.replace shadow id (addr, name);
+        upserts := trip :: !upserts)
+    registry;
+  (* after the pass above the shadow is a superset of the live
+     registry, so they differ exactly when something was collected --
+     only then is the sweep for dropped ids paid *)
+  let drops =
+    if Hashtbl.length shadow = Array.length registry then []
+    else begin
+      let live = Hashtbl.create (Array.length registry) in
+      Array.iter (fun (id, _, _) -> Hashtbl.replace live id ()) registry;
+      let dead = ref [] in
+      Hashtbl.iter
+        (fun id (_ : nativeint * string) ->
+          if not (Hashtbl.mem live id) then dead := id :: !dead)
+        shadow;
+      List.iter (Hashtbl.remove shadow) !dead;
+      List.sort Int.compare !dead
+    end
+  in
+  Sexp.sexp_of_registry_delta
+    ~upserts:(Array.of_list (List.rev !upserts))
+    ~drops
+
 (* one event, one line; the {} markers around it belong to the
    instrumentation, the terminating newline to us *)
 let emit_event ~loc ~fn ~args ~id ~registry ~binder ~scope ~ty snap =
@@ -69,7 +112,8 @@ let emit_event ~loc ~fn ~args ~id ~registry ~binder ~scope ~ty snap =
        ; Sexp.List [ Sexp.Atom "loc"; Sexp.sexp_of_loc loc ]
        ; Sexp.List [ Sexp.Atom "fn"; Sexp.sexp_of_fn fn ]
        ; Sexp.List [ Sexp.Atom "args"; Sexp.sexp_of_args args ]
-       ; Sexp.List [ Sexp.Atom "registry"; Sexp.sexp_of_registry registry ]
+       ; Sexp.List
+           [ Sexp.Atom "registry_delta"; registry_delta registry ]
        ; Sexp.List [ Sexp.Atom "ty"; Sexp.sexp_of_ty ty ] ]
        @ binder_field
        @ [ Sexp.List [ Sexp.Atom "scope"; Sexp.sexp_of_scope scope ]
